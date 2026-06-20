@@ -545,14 +545,17 @@ async function renderFormVenda(c) {
   // Gerar próximo código automaticamente para nova venda
   let proximoCodigo = '';
   if(isNew) {
-    const ultimas = await apiGet('vendas?select=codigo_venda&order=id_venda.desc&limit=1');
-    if(Array.isArray(ultimas) && ultimas.length > 0) {
-      const ultimo = ultimas[0].codigo_venda || 'PED-0000';
-      const num = parseInt(ultimo.replace(/[^0-9]/g,'')) || 0;
-      proximoCodigo = 'PED-' + String(num+1).padStart(4,'0');
-    } else {
-      proximoCodigo = 'PED-0001';
-    }
+    const ref = new Date();
+    const prefixo = `V${String(ref.getFullYear()).slice(-2)}${String(ref.getMonth()+1).padStart(2,'0')}-`;
+    const vendasMes = await apiGet(`vendas?select=codigo_venda&codigo_venda=like.${prefixo}%25&order=codigo_venda.desc`);
+    const nums = Array.isArray(vendasMes)
+      ? vendasMes.map(v => {
+        const m = String(v.codigo_venda||'').match(new RegExp('^'+prefixo+'(\\d{3})$'));
+        return m ? parseInt(m[1],10) : 0;
+      })
+      : [];
+    const num = nums.length ? Math.max(...nums) : 0;
+    proximoCodigo = `${prefixo}${String(num+1).padStart(3,'0')}`;
   }
 
   const statusMap = {'PENDENTE':'Pendente','ENTREGUE':'Entregue'};
