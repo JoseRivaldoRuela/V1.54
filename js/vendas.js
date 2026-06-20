@@ -1223,7 +1223,8 @@ async function imprimirTicketVenda(idVenda) {
             alert('Pedido enviado para a impressora.');
             try{ device.gatt.disconnect(); }catch(e){}
           }catch(e){
-            alert('Nao foi possivel imprimir via Bluetooth direto. Se a impressora nao aparece na lista, ela provavelmente usa Bluetooth classico. Use Compartilhar imagem ou um app tipo RawBT/Bluetooth Print.');
+            const abrirApps = confirm('Nao foi possivel imprimir via Bluetooth direto. Essa impressora provavelmente usa Bluetooth classico. Quer abrir o compartilhamento da imagem para escolher RawBT, Bluetooth Print ou o app da impressora?');
+            if(abrirApps) await compartilharTicket();
           }
         }
       </script>
@@ -1252,7 +1253,7 @@ async function imprimirTicketVenda(idVenda) {
         <div class="actions no-print">
           <button class="primary" onclick="window.print()">Imprimir</button>
           <button onclick="compartilharTicket()">Compartilhar imagem</button>
-          <button onclick="imprimirTermicaBluetooth()">Térmica Bluetooth</button>
+          <button onclick="imprimirTermicaBluetooth()">Térmica direta / App</button>
           <button class="whats" onclick="enviarWhatsApp()">WhatsApp / Apps</button>
         </div>
         <div class="hint no-print">No celular, compartilha o ticket como arquivo PNG. No computador, baixa a imagem para anexar.</div>
