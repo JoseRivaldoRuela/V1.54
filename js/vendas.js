@@ -862,7 +862,7 @@ async function imprimirTicketVenda(idVenda) {
   const subtotal = itens.reduce((s,i)=>s+Number(i.subtotal || ((Number(i.quantidade||0)*Number(i.preco_unitario||0))-Number(i.desconto_item||0))),0);
   const desconto = Number(venda.desconto_total||0);
   const total = Number(venda.valor_final||Math.max(0,subtotal-desconto));
-  const statusFin = ['PIX','DINHEIRO','CARTAO'].includes(venda.meio_pagamento) && venda.status_entrega === 'ENTREGUE' ? 'PAGO' : 'A RECEBER';
+  const statusFin = venda.status_entrega === 'ENTREGUE' ? 'A RECEBER' : 'Pendente';
   const itensTexto = itens.map(i => {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
     const qtd = Number(i.quantidade||0);
@@ -886,6 +886,27 @@ async function imprimirTicketVenda(idVenda) {
     `Total: ${fmt(total)}`,
     venda.observacoes ? `Observações: ${venda.observacoes}` : ''
   ].filter(Boolean).join('\n');
+  const ticketData = {
+    empresa: 'JR Representacoes',
+    titulo: 'Ticket de Venda',
+    codigo: venda.codigo_venda || '#'+idVenda,
+    cliente,
+    venda: venda.data_venda ? new Date(venda.data_venda).toLocaleString('pt-BR') : '-',
+    entrega: venda.data_entrega ? new Date(venda.data_entrega).toLocaleString('pt-BR') : 'Pendente',
+    pagamento: `${venda.meio_pagamento||'-'} - ${statusFin}`,
+    subtotal: fmt(subtotal),
+    desconto: fmt(desconto),
+    total: fmt(total),
+    observacoes: venda.observacoes || '',
+    impressoEm: new Date().toLocaleString('pt-BR'),
+    itens: itens.map(i => {
+      const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
+      const qtd = Number(i.quantidade||0);
+      const preco = Number(i.preco_unitario||0);
+      const sub = Number(i.subtotal || ((qtd*preco)-Number(i.desconto_item||0)));
+      return { nome, qtd, preco: fmt(preco), total: fmt(sub) };
+    })
+  };
   const itensHtml = itens.map(i => {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
     const qtd = Number(i.quantidade||0);
@@ -919,23 +940,162 @@ async function imprimirTicketVenda(idVenda) {
         @media print{body{padding:0}.no-print{display:none}}
       </style>
       <script>
-        const ticketText = ${JSON.stringify(ticketTexto)};
+        const ticketData = ${JSON.stringify(ticketData)};
+        function wrapText(ctx, text, maxWidth){
+          const words = String(text || '').split(/\\s+/).filter(Boolean);
+          const lines = [];
+          let line = '';
+          words.forEach(word => {
+            const test = line ? line + ' ' + word : word;
+            if(ctx.measureText(test).width > maxWidth && line){
+              lines.push(line);
+              line = word;
+            } else {
+              line = test;
+            }
+          });
+          if(line) lines.push(line);
+          return lines.length ? lines : [''];
+        }
+        function drawLine(ctx, x1, x2, y){
+          ctx.strokeStyle = '#999';
+          ctx.setLineDash([8, 8]);
+          ctx.beginPath();
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        function buildTicketCanvas(){
+          const width = 900;
+          const pad = 46;
+          const temp = document.createElement('canvas').getContext('2d');
+          temp.font = '28px Arial';
+          let y = pad + 52 + 34 + 22 + 5 * 36 + 26 + 42;
+          ticketData.itens.forEach(item => {
+            temp.font = '26px Arial';
+            const linhas = wrapText(temp, item.nome, 430);
+            y += Math.max(40, linhas.length * 30) + 14;
+          });
+          y += 30 + 4 * 38 + (ticketData.observacoes ? 90 : 0) + 80;
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = Math.max(1180, y);
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#111';
+          ctx.textBaseline = 'top';
+          let cy = pad;
+          ctx.font = 'bold 42px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(ticketData.empresa, width/2, cy);
+          cy += 52;
+          ctx.font = '26px Arial';
+          ctx.fillStyle = '#555';
+          ctx.fillText(ticketData.titulo, width/2, cy);
+          cy += 44;
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#111';
+          ctx.font = '26px Arial';
+          const row = (label, value) => {
+            ctx.font = 'bold 26px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(label, pad, cy);
+            ctx.font = '26px Arial';
+            ctx.textAlign = 'right';
+            ctx.fillText(String(value || '-'), width - pad, cy);
+            cy += 36;
+          };
+          row('Pedido', ticketData.codigo);
+          row('Cliente', ticketData.cliente);
+          row('Venda', ticketData.venda);
+          row('Entrega', ticketData.entrega);
+          row('Pagamento', ticketData.pagamento);
+          cy += 10;
+          drawLine(ctx, pad, width-pad, cy);
+          cy += 24;
+          ctx.fillStyle = '#111';
+          ctx.font = 'bold 24px Arial';
+          ctx.textAlign = 'left';
+          ctx.fillText('Produto', pad, cy);
+          ctx.textAlign = 'center';
+          ctx.fillText('Qtd', 560, cy);
+          ctx.textAlign = 'right';
+          ctx.fillText('Unit.', 710, cy);
+          ctx.fillText('Total', width-pad, cy);
+          cy += 38;
+          ticketData.itens.forEach(item => {
+            ctx.font = '26px Arial';
+            ctx.fillStyle = '#111';
+            const linhas = wrapText(ctx, item.nome, 430);
+            ctx.textAlign = 'left';
+            linhas.forEach((linha, idx) => ctx.fillText(linha, pad, cy + idx * 30));
+            ctx.textAlign = 'center';
+            ctx.fillText(String(item.qtd), 560, cy);
+            ctx.textAlign = 'right';
+            ctx.fillText(item.preco, 710, cy);
+            ctx.fillText(item.total, width-pad, cy);
+            cy += Math.max(40, linhas.length * 30) + 14;
+          });
+          drawLine(ctx, pad, width-pad, cy);
+          cy += 26;
+          row('Subtotal', ticketData.subtotal);
+          row('Desconto', ticketData.desconto);
+          ctx.font = 'bold 34px Arial';
+          ctx.textAlign = 'left';
+          ctx.fillText('Total', pad, cy);
+          ctx.textAlign = 'right';
+          ctx.fillText(ticketData.total, width-pad, cy);
+          cy += 48;
+          if(ticketData.observacoes){
+            drawLine(ctx, pad, width-pad, cy);
+            cy += 24;
+            ctx.font = 'bold 25px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText('Observacoes', pad, cy);
+            cy += 34;
+            ctx.font = '24px Arial';
+            wrapText(ctx, ticketData.observacoes, width - pad * 2).forEach(linha => {
+              ctx.fillText(linha, pad, cy);
+              cy += 30;
+            });
+          }
+          cy += 20;
+          drawLine(ctx, pad, width-pad, cy);
+          cy += 24;
+          ctx.font = '22px Arial';
+          ctx.fillStyle = '#666';
+          ctx.textAlign = 'center';
+          ctx.fillText('Impresso em ' + ticketData.impressoEm, width/2, cy);
+          return canvas;
+        }
+        function canvasToBlob(canvas){
+          return new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
+        }
+        async function gerarArquivoTicket(){
+          const canvas = buildTicketCanvas();
+          const blob = await canvasToBlob(canvas);
+          return new File([blob], 'pedido-' + String(ticketData.codigo).replace(/[^a-z0-9_-]/gi,'-') + '.png', {type:'image/png'});
+        }
         async function compartilharTicket(){
-          if(navigator.share){
+          const file = await gerarArquivoTicket();
+          if(navigator.canShare && navigator.canShare({files:[file]})){
             try{
-              await navigator.share({title:document.title,text:ticketText});
+              await navigator.share({title:'Pedido ' + ticketData.codigo, files:[file]});
               return;
             }catch(e){}
           }
-          try{
-            await navigator.clipboard.writeText(ticketText);
-            alert('Texto do pedido copiado. Agora cole no WhatsApp ou em outro app.');
-          }catch(e){
-            alert(ticketText);
-          }
+          const url = URL.createObjectURL(file);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = file.name;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          alert('Imagem do pedido baixada. Anexe esse arquivo no WhatsApp ou no app desejado.');
         }
-        function enviarWhatsApp(){
-          window.open('https://wa.me/?text='+encodeURIComponent(ticketText),'_blank');
+        async function enviarWhatsApp(){
+          await compartilharTicket();
         }
       </script>
     </head>
@@ -962,10 +1122,10 @@ async function imprimirTicketVenda(idVenda) {
         <div class="sub">Impresso em ${new Date().toLocaleString('pt-BR')}</div>
         <div class="actions no-print">
           <button class="primary" onclick="window.print()">Imprimir</button>
-          <button onclick="compartilharTicket()">Compartilhar</button>
-          <button class="whats" onclick="enviarWhatsApp()">Enviar pelo WhatsApp</button>
+          <button onclick="compartilharTicket()">Compartilhar imagem</button>
+          <button class="whats" onclick="enviarWhatsApp()">WhatsApp / Apps</button>
         </div>
-        <div class="hint no-print">No celular, Compartilhar pode abrir a lista de apps. No computador, WhatsApp abre o WhatsApp Web.</div>
+        <div class="hint no-print">No celular, compartilha o ticket como arquivo PNG. No computador, baixa a imagem para anexar.</div>
       </div>
     </body>
     </html>`;
