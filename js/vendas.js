@@ -1109,6 +1109,123 @@ async function imprimirTicketVenda(idVenda) {
         async function enviarWhatsApp(){
           await compartilharTicket();
         }
+        function semAcento(texto){
+          return String(texto || '')
+            .normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '')
+            .replace(/[^\\x20-\\x7E\\n]/g, '');
+        }
+        function quebrarLinha(texto, largura){
+          const palavras = semAcento(texto).split(/\\s+/).filter(Boolean);
+          const linhas = [];
+          let linha = '';
+          palavras.forEach(p => {
+            const teste = linha ? linha + ' ' + p : p;
+            if(teste.length > largura && linha){
+              linhas.push(linha);
+              linha = p;
+            } else {
+              linha = teste;
+            }
+          });
+          if(linha) linhas.push(linha);
+          return linhas.length ? linhas : [''];
+        }
+        function montarEscPos(){
+          const enc = new TextEncoder();
+          const out = [];
+          const add = bytes => out.push(...bytes);
+          const txt = texto => add([...enc.encode(semAcento(texto))]);
+          const linha = () => txt('--------------------------------\\n');
+          add([0x1b,0x40]);
+          add([0x1b,0x61,0x01]);
+          add([0x1b,0x45,0x01]);
+          txt(ticketData.empresa + '\\n');
+          add([0x1b,0x45,0x00]);
+          txt(ticketData.titulo + '\\n');
+          add([0x1b,0x61,0x00]);
+          linha();
+          txt('Pedido: ' + ticketData.codigo + '\\n');
+          txt('Cliente: ' + ticketData.cliente + '\\n');
+          txt('Venda: ' + ticketData.venda + '\\n');
+          txt('Entrega: ' + ticketData.entrega + '\\n');
+          txt('Pagamento: ' + ticketData.pagamento + '\\n');
+          linha();
+          ticketData.itens.forEach(item => {
+            quebrarLinha(item.nome, 32).forEach(l => txt(l + '\\n'));
+            const qtd = String(item.qtd).padStart(4, ' ');
+            const total = String(item.total).padStart(12, ' ');
+            txt(qtd + ' x ' + item.preco + total + '\\n');
+          });
+          linha();
+          txt('Subtotal: ' + ticketData.subtotal + '\\n');
+          txt('Desconto: ' + ticketData.desconto + '\\n');
+          add([0x1b,0x45,0x01]);
+          txt('Total: ' + ticketData.total + '\\n');
+          add([0x1b,0x45,0x00]);
+          if(ticketData.observacoes){
+            linha();
+            quebrarLinha('Obs: ' + ticketData.observacoes, 32).forEach(l => txt(l + '\\n'));
+          }
+          linha();
+          add([0x1b,0x61,0x01]);
+          txt('Impresso em\\n' + ticketData.impressoEm + '\\n\\n\\n');
+          add([0x1d,0x56,0x42,0x00]);
+          return new Uint8Array(out);
+        }
+        async function escreverEmChunks(characteristic, bytes){
+          const tamanho = 120;
+          for(let i=0; i<bytes.length; i+=tamanho){
+            const chunk = bytes.slice(i, i+tamanho);
+            if(characteristic.writeValueWithoutResponse) await characteristic.writeValueWithoutResponse(chunk);
+            else await characteristic.writeValue(chunk);
+            await new Promise(r => setTimeout(r, 35));
+          }
+        }
+        async function imprimirTermicaBluetooth(){
+          if(!navigator.bluetooth){
+            alert('Este navegador nao permite impressao Bluetooth direta. Use Chrome no Android ou compartilhe a imagem do pedido.');
+            return;
+          }
+          const perfis = [
+            {service:'6e400001-b5a3-f393-e0a9-e50e24dcca9e', chars:['6e400002-b5a3-f393-e0a9-e50e24dcca9e']},
+            {service:'000018f0-0000-1000-8000-00805f9b34fb', chars:['00002af1-0000-1000-8000-00805f9b34fb','00002af0-0000-1000-8000-00805f9b34fb']},
+            {service:'49535343-fe7d-4ae5-8fa9-9fafd205e455', chars:['49535343-8841-43f4-a8d4-ecbe34729bb3']}
+          ];
+          try{
+            const device = await navigator.bluetooth.requestDevice({
+              acceptAllDevices:true,
+              optionalServices:perfis.map(p => p.service)
+            });
+            const server = await device.gatt.connect();
+            let characteristic = null;
+            for(const perfil of perfis){
+              try{
+                const service = await server.getPrimaryService(perfil.service);
+                for(const ch of perfil.chars){
+                  try{
+                    const c = await service.getCharacteristic(ch);
+                    if(c.properties.write || c.properties.writeWithoutResponse){
+                      characteristic = c;
+                      break;
+                    }
+                  }catch(e){}
+                }
+              }catch(e){}
+              if(characteristic) break;
+            }
+            if(!characteristic){
+              alert('A impressora conectou, mas nao encontrei canal de escrita compativel. Ela pode usar Bluetooth classico/SPP.');
+              try{ device.gatt.disconnect(); }catch(e){}
+              return;
+            }
+            await escreverEmChunks(characteristic, montarEscPos());
+            alert('Pedido enviado para a impressora.');
+            try{ device.gatt.disconnect(); }catch(e){}
+          }catch(e){
+            alert('Nao foi possivel imprimir via Bluetooth direto. Se a impressora nao aparece na lista, ela provavelmente usa Bluetooth classico. Use Compartilhar imagem ou um app tipo RawBT/Bluetooth Print.');
+          }
+        }
       </script>
     </head>
     <body>
@@ -1135,6 +1252,7 @@ async function imprimirTicketVenda(idVenda) {
         <div class="actions no-print">
           <button class="primary" onclick="window.print()">Imprimir</button>
           <button onclick="compartilharTicket()">Compartilhar imagem</button>
+          <button onclick="imprimirTermicaBluetooth()">Térmica Bluetooth</button>
           <button class="whats" onclick="enviarWhatsApp()">WhatsApp / Apps</button>
         </div>
         <div class="hint no-print">No celular, compartilha o ticket como arquivo PNG. No computador, baixa a imagem para anexar.</div>
