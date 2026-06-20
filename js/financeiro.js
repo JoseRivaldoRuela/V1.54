@@ -1,10 +1,21 @@
 // =====================
 // CONTAS A RECEBER
 // =====================
+async function anexarCodigoVendaContas(contas) {
+  if(!Array.isArray(contas) || !contas.length) return contas;
+  const ids = [...new Set(contas.map(c=>Number(c.id_venda||0)).filter(Boolean))];
+  if(!ids.length) return contas;
+  const vendas = await apiGet(`vendas?select=id_venda,codigo_venda&id_venda=in.(${ids.join(',')})`);
+  const mapa = {};
+  if(Array.isArray(vendas)) vendas.forEach(v => { mapa[Number(v.id_venda)] = v.codigo_venda; });
+  contas.forEach(c => { c.codigo_venda = mapa[Number(c.id_venda)] || null; });
+  return contas;
+}
+
 async function renderFormConta(c) {
   await loadCacheCobrancas();
   // Buscar código da venda separadamente
-  let codigoVenda = '';
+  let codigoVenda = c?.codigo_venda || '';
   if(c?.id_venda) {
     const vRef = await apiGet('vendas?select=codigo_venda&id_venda=eq.'+c.id_venda);
     if(Array.isArray(vRef) && vRef[0]) codigoVenda = vRef[0].codigo_venda;
@@ -124,6 +135,7 @@ async function renderDashboardContas() {
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando análises...</div>';
 
   const contas = await apiGet('contas_receber?select=*,clientes!fk_conta_cliente(nome_fantasia,razao_social)&order=data_vencimento.asc');
+  await anexarCodigoVendaContas(contas);
   if(!Array.isArray(contas)) { body.innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div><p>Erro ao carregar dados</p></div>'; return; }
 
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -334,6 +346,7 @@ function listarContas(filtro, titulo) {
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
         <thead><tr style="background:var(--surface2);">
           <th style="padding:10px 14px;text-align:left;font-size:11px;color:var(--text2);font-weight:500;">Cliente</th>
+          <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pedido</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Vencimento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Recebimento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pagamento</th>
@@ -341,7 +354,7 @@ function listarContas(filtro, titulo) {
           <th style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Valor</th>
         </tr></thead>
         <tbody>
-          ${lista.length===0?'<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
+          ${lista.length===0?'<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
           lista.map(c=>{
             const venc=new Date(c.data_vencimento);
             const receb=new Date(c.data_recebimento || '');
@@ -351,6 +364,7 @@ function listarContas(filtro, titulo) {
             const valorLinha = c.status_recebimento==='RECEBIDO' ? (c.valor_recebido||c.valor_original) : c.valor_original;
             return `<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="openItem(${c.id_conta})" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
               <td style="padding:10px 14px;">${c.clientes?.nome_fantasia||c.clientes?.razao_social||'-'}</td>
+              <td style="padding:10px 14px;text-align:center;color:var(--accent);font-family:var(--mono);font-weight:600;">${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')}</td>
               <td style="padding:10px 14px;text-align:center;color:${atras?'var(--danger)':'var(--text2)'};">${venc.toLocaleDateString('pt-BR')}</td>
               <td style="padding:10px 14px;text-align:center;color:${c.status_recebimento==='RECEBIDO'?'var(--accent)':'var(--text3)'};">${c.data_recebimento?receb.toLocaleDateString('pt-BR'):'-'}</td>
               <td style="padding:10px 14px;text-align:center;color:var(--text2);">${c.meio_pagamento||'-'}</td>
@@ -360,7 +374,7 @@ function listarContas(filtro, titulo) {
           }).join('')}
         </tbody>
         <tfoot><tr style="border-top:2px solid var(--border);background:var(--surface2);">
-          <td colspan="5" style="padding:10px 14px;font-weight:600;">Total</td>
+          <td colspan="6" style="padding:10px 14px;font-weight:600;">Total</td>
           <td style="padding:10px 14px;text-align:right;font-weight:700;color:var(--accent);font-family:var(--mono);">${fmt(total)}</td>
         </tr></tfoot>
       </table>

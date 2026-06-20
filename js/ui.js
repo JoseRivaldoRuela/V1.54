@@ -91,6 +91,7 @@ async function loadItems() {
   if(currentTab==='estoque_movimentacoes') orderParam = 'data_movimentacao.desc,id_movimentacao.desc';
   const data=await apiGet(`${cfg.table}?select=${sel}&order=${orderParam}`);
   if(!Array.isArray(data)){ toast('Erro ao carregar: '+(data?.message||''),'error'); return; }
+  if(currentTab==='contas_receber') await anexarCodigoVendaContas(data);
   // Ordenar: pendentes primeiro por data_entrega asc, entregues depois por data_entrega asc
   if(currentTab==='vendas') {
     data.sort((a,b) => {
@@ -223,7 +224,7 @@ function renderList() {
       const hoje = new Date();
       const atrasado = c.status_recebimento!=='RECEBIDO' && venc < hoje;
       nome = c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${c.id_cliente}`;
-      sub = `Venc: ${venc.toLocaleDateString('pt-BR')} · R$ ${Number(c.valor_original||0).toFixed(2)}`;
+      sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} - Venc: ${venc.toLocaleDateString('pt-BR')} - R$ ${Number(c.valor_original||0).toFixed(2)}`;
       const sc = c.status_recebimento==='RECEBIDO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_recebimento==='RECEBIDO'?'RECEBIDO':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;

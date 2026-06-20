@@ -48,7 +48,21 @@ begin
       and valor_final = 276.40
       and coalesce(observacoes, '') like '%' || v_import_ref || '%'
   ) then
-    raise notice 'Este pedido ja foi importado anteriormente. Nada foi importado para evitar duplicidade.';
+    select id_venda, codigo_venda
+      into v_id_venda, v_codigo
+    from public.vendas
+    where id_cliente = v_id_cliente
+      and data_venda = v_data
+      and valor_final = 276.40
+      and coalesce(observacoes, '') like '%' || v_import_ref || '%'
+    order by id_venda desc
+    limit 1;
+
+    update public.contas_receber
+      set observacoes = 'Pedido ' || coalesce(v_codigo, '#' || v_id_venda::text) || ' - Parcela 1/1 - importado de ' || v_import_ref
+    where id_venda = v_id_venda;
+
+    raise notice 'Este pedido ja foi importado anteriormente. Conta a receber atualizada com o codigo do pedido %. Nada foi duplicado.', v_codigo;
     return;
   end if;
 
@@ -289,7 +303,7 @@ begin
     'BOLETO',
     'PENDENTE',
     null,
-    'Parcela 1/1 - pedido importado ' || v_codigo
+    'Pedido ' || v_codigo || ' - Parcela 1/1 - importado de ' || v_import_ref
   );
 
   raise notice 'Venda % importada com sucesso. id_venda=% cliente=%', v_codigo, v_id_venda, v_id_cliente;
