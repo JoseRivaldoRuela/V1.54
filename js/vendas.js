@@ -518,7 +518,7 @@ function calcularVencimentoVenda() {
   vencEl.value = addDaysToDateInput(base, Number(diasEl.value||0));
 }
 
-function pagamentoRecebeNaHora(pagamento) {
+function pagamentoVenceNaDataDaVenda(pagamento) {
   return ['PIX','DINHEIRO','CARTAO'].includes(String(pagamento||'').toUpperCase());
 }
 
@@ -1033,13 +1033,13 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
   const pagamento = opcoes.meio_pagamento || venda?.meio_pagamento;
   if(!pagamento) return { ok:false, data:{ message:'Informe o meio de pagamento para gerar o financeiro.' } };
 
-  const pagamentoRecebido = opcoes.recebido === true || pagamentoRecebeNaHora(pagamento);
+  const pagamentoRecebido = opcoes.recebido === true;
   const valorConta = Number(opcoes.valor_final ?? venda?.valor_final ?? 0);
   const parcelas = Math.max(1, parseInt(opcoes.quantidade_parcelas ?? venda?.quantidade_parcelas ?? '1',10)||1);
   const dias = Math.max(0, parseInt(opcoes.dias_vencimento ?? venda?.dias_vencimento ?? '0',10)||0);
   const totalParcelas = pagamentoRecebido ? 1 : parcelas;
   const valorBase = Math.floor((valorConta / totalParcelas) * 100) / 100;
-  const vencBase = pagamentoRecebido
+  const vencBase = pagamentoVenceNaDataDaVenda(pagamento)
     ? toLocalDateInput(venda?.data_entrega || venda?.data_venda || new Date())
     : (opcoes.data_vencimento || venda?.data_vencimento || toLocalDateInput());
   const obs = (opcoes.observacoes || '').trim();
@@ -1087,7 +1087,7 @@ async function saveVenda() {
   const meioPagamentoForm = document.getElementById('f-meio_pagamento').value || null;
   const vendaDataBase = (data_venda || toLocalDateTimeInput()).slice(0,10);
   const vencimentoForm = document.getElementById('f-data_vencimento').value || null;
-  const vencimentoSeguro = status === 'ENTREGUE' && pagamentoRecebeNaHora(meioPagamentoForm)
+  const vencimentoSeguro = status === 'ENTREGUE' && pagamentoVenceNaDataDaVenda(meioPagamentoForm)
     ? vendaDataBase
     : (vencimentoForm || addDaysToDateInput(vendaDataBase, Math.max(0, parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0)));
   if(status === 'ENTREGUE' && !meioPagamentoForm) {
@@ -1240,10 +1240,6 @@ async function marcarEntregue(idVenda) {
               <input class="form-input" type="number" min="0" step="1" id="entrega-dias" value="${diasAtual}"/>
             </div>
           </div>
-          <div class="toggle-row" style="margin-bottom:14px;">
-            <div class="toggle-info"><strong>Pagamento recebido</strong><span>Marque quando o valor ja entrou no caixa.</span></div>
-            <label class="toggle"><input type="checkbox" id="entrega-recebido" ${['PIX','DINHEIRO','CARTAO'].includes(pagamentoAtual)?'checked':''}/><span class="toggle-slider"></span></label>
-          </div>
           <div class="form-group">
             <label class="form-label">Observações</label>
             <textarea class="form-textarea" id="entrega-obs" placeholder="Observações..." style="min-height:60px;"></textarea>
@@ -1264,7 +1260,6 @@ async function confirmarEntrega(idVenda) {
   const vencimento = document.getElementById('entrega-vencimento').value;
   const parcelasEntrega = Math.max(1, parseInt(document.getElementById('entrega-parcelas')?.value||'1',10)||1);
   const diasEntrega = Math.max(0, parseInt(document.getElementById('entrega-dias')?.value||'0',10)||0);
-  const recebidoNaEntrega = document.getElementById('entrega-recebido')?.checked === true;
   const obs = document.getElementById('entrega-obs').value.trim();
 
   if(!pagamento){ toast('Selecione o meio de pagamento','error'); return; }
@@ -1292,7 +1287,7 @@ async function confirmarEntrega(idVenda) {
     quantidade_parcelas: parcelasEntrega,
     dias_vencimento: diasEntrega,
     data_vencimento: vencimento || null,
-    recebido: recebidoNaEntrega,
+    recebido: false,
     observacoes: obs
   });
   if(!contaRes.ok) {
@@ -1310,7 +1305,7 @@ async function confirmarEntrega(idVenda) {
   }
 
   document.getElementById('entrega-modal')?.remove();
-  toast(recebidoNaEntrega ? 'Entrega confirmada e financeiro baixado!' : 'Entrega confirmada e conta a receber atualizada!','success');
+  toast('Entrega confirmada e conta a receber gerada em aberto!','success');
   await loadItems();
   openItem(idVenda);
 }
