@@ -918,26 +918,38 @@ async function imprimirTicketVenda(idVenda) {
   const html = `
     <html>
     <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
       <title>Ticket ${venda.codigo_venda||idVenda}</title>
       <style>
-        body{font-family:Arial,sans-serif;margin:0;padding:18px;color:#111;font-size:12px;}
-        .ticket{max-width:360px;margin:0 auto;}
-        h1{font-size:18px;margin:0 0 4px;text-align:center;}
+        *{box-sizing:border-box;}
+        html,body{margin:0;min-height:100%;background:#f2f2f2;}
+        body{font-family:Arial,sans-serif;padding:14px;color:#111;font-size:14px;-webkit-text-size-adjust:100%;}
+        .ticket{width:min(100%,420px);margin:0 auto;background:#fff;padding:18px 16px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.12);}
+        h1{font-size:22px;margin:0 0 4px;text-align:center;}
         .sub{text-align:center;color:#555;margin-bottom:12px;}
-        .row{display:flex;justify-content:space-between;gap:12px;margin:4px 0;}
-        .sep{border-top:1px dashed #999;margin:10px 0;}
+        .row{display:flex;justify-content:space-between;gap:12px;margin:6px 0;}
+        .row span:last-child{text-align:right;overflow-wrap:anywhere;}
+        .sep{border-top:1px dashed #999;margin:12px 0;}
         table{width:100%;border-collapse:collapse;margin-top:6px;}
-        th,td{padding:5px 0;border-bottom:1px solid #eee;text-align:left;}
+        th,td{padding:7px 0;border-bottom:1px solid #eee;text-align:left;vertical-align:top;}
+        th:first-child,td:first-child{padding-right:8px;}
         th:nth-child(2),td:nth-child(2){text-align:center;}
         th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4){text-align:right;}
-        .total{font-size:15px;font-weight:700;}
+        .total{font-size:18px;font-weight:700;}
         .obs{white-space:pre-wrap;margin-top:6px;color:#333;}
-        .actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:12px;}
-        .actions button{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;background:#f7f7f7;color:#111;font-weight:700;cursor:pointer;}
+        .actions{position:sticky;bottom:0;display:grid;grid-template-columns:1fr;gap:10px;margin:16px -16px -18px;padding:12px 16px;background:rgba(255,255,255,.96);border-top:1px solid #ddd;border-radius:0 0 10px 10px;}
+        .actions button{width:100%;min-height:48px;padding:12px;border:1px solid #ccc;border-radius:8px;background:#f7f7f7;color:#111;font-size:15px;font-weight:700;cursor:pointer;}
         .actions button.primary{background:#111;color:#fff;border-color:#111;}
         .actions button.whats{background:#25d366;color:#061b0d;border-color:#25d366;}
-        .hint{text-align:center;color:#666;font-size:11px;margin-top:8px;}
-        @media print{body{padding:0}.no-print{display:none}}
+        .hint{text-align:center;color:#666;font-size:12px;margin-top:10px;line-height:1.35;}
+        @media(max-width:480px){
+          body{padding:0;background:#fff;font-size:15px;}
+          .ticket{width:100%;max-width:none;min-height:100vh;border-radius:0;box-shadow:none;padding:16px 14px 150px;}
+          h1{font-size:24px;}
+          .actions{position:fixed;left:0;right:0;bottom:0;margin:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));border-radius:14px 14px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,.14);}
+          .actions button{min-height:50px;font-size:16px;}
+        }
+        @media print{html,body{background:#fff}.ticket{box-shadow:none;border-radius:0;padding:0;max-width:360px}.actions,.hint,.no-print{display:none!important}body{padding:0;font-size:12px}.total{font-size:15px}}
       </style>
       <script>
         const ticketData = ${JSON.stringify(ticketData)};
@@ -1130,7 +1142,7 @@ async function imprimirTicketVenda(idVenda) {
     </body>
     </html>`;
 
-  const win = window.open('', '_blank', 'width=420,height=720');
+  const win = window.open('', '_blank', 'width=520,height=820');
   if(!win){ toast('Pop-up bloqueado. Permita pop-ups para imprimir.','error'); return; }
   win.document.open();
   win.document.write(html);
