@@ -1029,7 +1029,8 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
   const pagamento = opcoes.meio_pagamento || venda?.meio_pagamento;
   if(!pagamento) return { ok:false, data:{ message:'Informe o meio de pagamento para gerar o financeiro.' } };
 
-  const pagamentoRecebido = opcoes.recebido === true;
+  const pagamentosRecebidosNaHora = ['PIX','DINHEIRO','CARTAO'];
+  const pagamentoRecebido = opcoes.recebido === true || pagamentosRecebidosNaHora.includes(String(pagamento||'').toUpperCase());
   const valorConta = Number(opcoes.valor_final ?? venda?.valor_final ?? 0);
   const parcelas = Math.max(1, parseInt(opcoes.quantidade_parcelas ?? venda?.quantidade_parcelas ?? '1',10)||1);
   const dias = Math.max(0, parseInt(opcoes.dias_vencimento ?? venda?.dias_vencimento ?? '0',10)||0);
@@ -1231,7 +1232,7 @@ async function marcarEntregue(idVenda) {
           </div>
           <div class="toggle-row" style="margin-bottom:14px;">
             <div class="toggle-info"><strong>Pagamento recebido</strong><span>Marque quando o valor ja entrou no caixa.</span></div>
-            <label class="toggle"><input type="checkbox" id="entrega-recebido" ${['DINHEIRO','CARTAO'].includes(pagamentoAtual)?'checked':''}/><span class="toggle-slider"></span></label>
+            <label class="toggle"><input type="checkbox" id="entrega-recebido" ${['PIX','DINHEIRO','CARTAO'].includes(pagamentoAtual)?'checked':''}/><span class="toggle-slider"></span></label>
           </div>
           <div class="form-group">
             <label class="form-label">Observações</label>
