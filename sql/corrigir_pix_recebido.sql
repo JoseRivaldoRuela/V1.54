@@ -1,5 +1,6 @@
 update public.contas_receber cr
 set
+  data_vencimento = coalesce((v.data_entrega at time zone 'America/Sao_Paulo')::date, (v.data_venda at time zone 'America/Sao_Paulo')::date, current_date),
   status_recebimento = 'RECEBIDO',
   valor_recebido = coalesce(nullif(cr.valor_recebido, 0), cr.valor_original),
   data_recebimento = coalesce(v.data_entrega, v.data_venda, now()),
