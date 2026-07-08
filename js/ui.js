@@ -21,7 +21,7 @@ document.addEventListener('click', e => {
 
 function setActiveMenu(tab) {
   document.querySelectorAll('.menu-btn,.dropdown-item').forEach(el=>el.classList.remove('active'));
-  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config' };
+  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', importador_tickets:'config' };
   const produtosTabs = ['tipo_mercadoria','produtos_tab','precos_especiais','estoque_movimentacoes','kardex'];
   const main = menuMap[tab];
   if(main) document.getElementById('mbtn-'+main)?.classList.add('active');
@@ -32,14 +32,18 @@ function setActiveMenu(tab) {
 
 // TAB SWITCH
 async function switchTab(tab) {
-  if(tab==='usuarios' && !isAdmin){ toast('Acesso restrito ao administrador.','error'); return; }
+  if((tab==='usuarios' || tab==='importador_tickets') && !isAdmin){ toast('Acesso restrito ao administrador.','error'); return; }
   currentTab=tab; currentId=null; isNew=false;
   const cfg=tabConfig[tab];
   document.getElementById('topbar-title').textContent=cfg.plural;
   document.getElementById('btn-novo').textContent='+ '+cfg.label;
+  document.getElementById('btn-novo').style.display=tab==='importador_tickets'?'none':'block';
   document.getElementById('btn-cnpj').style.display=cfg.hasCNPJ?'block':'none';
   document.getElementById('search-input').value='';
   document.getElementById('content-header').style.display='none';
+  if(tab==='contas_receber') {
+    contasReceberClienteFiltro = null;
+  }
   if(tab==='vendas') {
     document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
     setActiveMenu(tab);
@@ -55,16 +59,37 @@ async function switchTab(tab) {
     setActiveMenu(tab);
     await loadItems();
     await renderDashboardCompras();
+  } else if(tab==='contas_pagar') {
+    document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando financeiro...</div>';
+    setActiveMenu(tab);
+    await loadItems();
+    await renderDashboardContasPagar();
   } else if(tab==='clientes') {
     document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
     setActiveMenu(tab);
     await loadItems();
     await renderDashboardClientes();
+  } else if(tab==='fornecedores') {
+    document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
+    setActiveMenu(tab);
+    await loadItems();
+    await renderDashboardFornecedores();
+  } else if(tab==='produtos_tab') {
+    document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
+    setActiveMenu(tab);
+    await loadItems();
+    await renderDashboardProdutos();
   } else if(tab==='kardex') {
     document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando Kardex...</div>';
     setActiveMenu(tab);
     await loadItems();
     await renderKardex();
+  } else if(tab==='importador_tickets') {
+    setActiveMenu(tab);
+    items=[]; filtered=[];
+    document.getElementById('item-list').innerHTML='<div class="empty-state" style="padding:18px 10px;"><div class="empty-icon">PDF</div><p>Selecione os tickets na tela principal</p></div>';
+    document.getElementById('sidebar-footer').textContent='Importador';
+    renderImportadorTickets();
   } else {
     document.getElementById('content-body').innerHTML=`<div class="empty-state"><div class="empty-icon">${cfg.hasCNPJ?'👥':'📦'}</div><p>Selecione um ${cfg.label.toLowerCase()} ou crie um novo</p></div>`;
     setActiveMenu(tab);
@@ -92,31 +117,79 @@ async function loadItems() {
   const data=await apiGet(`${cfg.table}?select=${sel}&order=${orderParam}`);
   if(!Array.isArray(data)){ toast('Erro ao carregar: '+(data?.message||''),'error'); return; }
   if(currentTab==='contas_receber') await anexarCodigoVendaContas(data);
-  // Ordenar: pendentes primeiro por data_entrega asc, entregues depois por data_entrega asc
+  if(currentTab==='contas_pagar') await anexarDadosCompraContasPagar(data);
+  // Ordenar: pendentes primeiro por data_entrega asc (mais antigos primeiro), entregues depois por data_entrega desc (mais atuais primeiro)
   if(currentTab==='vendas') {
     data.sort((a,b) => {
-      const aPend = a.status_entrega !== 'ENTREGUE';
-      const bPend = b.status_entrega !== 'ENTREGUE';
+      const aStatus = (a.status_entrega || '').toUpperCase();
+      const bStatus = (b.status_entrega || '').toUpperCase();
+      const aPend = aStatus !== 'ENTREGUE' && aStatus !== 'CANCELADO';
+      const bPend = bStatus !== 'ENTREGUE' && bStatus !== 'CANCELADO';
       if(aPend && !bPend) return -1;
       if(!aPend && bPend) return 1;
-      // Mesmo grupo - ordenar por data_entrega asc
       const dA = a.data_entrega || a.data_venda || '';
       const dB = b.data_entrega || b.data_venda || '';
-      return dA < dB ? -1 : dA > dB ? 1 : 0;
+      if(aPend) return dA < dB ? -1 : dA > dB ? 1 : 0;
+      return dA > dB ? -1 : dA < dB ? 1 : 0;
     });
   }
-  items=data; filtered=[...items];
+  items=data;
+  filtered=currentTab==='contas_receber' ? filtrarLateralContasReceber(items) : [...items];
   renderList();
   document.getElementById('sidebar-footer').textContent=`${items.length} ${cfg.plural.toLowerCase()}`;
   const badge=document.getElementById('badge-'+currentTab);
   if(badge) badge.textContent=items.length;
 }
 
-function cardVenda(c) {
+async function anexarDadosCompraContasPagar(contas) {
+  if(!Array.isArray(contas) || !contas.length) return contas;
+  const ids = [...new Set(contas.map(c=>Number(c.id_compra||0)).filter(Boolean))];
+  if(!ids.length) return contas;
+  const compras = await apiGet(`compras?select=id_compra,codigo_compra,data_compra&id_compra=in.(${ids.join(',')})`);
+  const mapa = {};
+  if(Array.isArray(compras)) compras.forEach(c => { mapa[Number(c.id_compra)] = c; });
+  contas.forEach(c => { c.compras = mapa[Number(c.id_compra)] || null; });
+  return contas;
+}
+
+let cacheResumoContasVendas = null;
+let cacheResumoContasVendasIds = [];
+
+async function carregarResumoContasVendas(ids) {
+  const idsNorm = [...new Set((ids||[]).map(Number).filter(Boolean))];
+  if(!idsNorm.length) return {};
+  const mesmosIds = cacheResumoContasVendasIds.length === idsNorm.length && idsNorm.every((id,i)=>cacheResumoContasVendasIds[i]===id);
+  if(mesmosIds && cacheResumoContasVendas) return cacheResumoContasVendas;
+  const data = await apiGet(`contas_receber?select=id_conta,id_cliente,valor_original,valor_recebido,status_recebimento,data_vencimento&id_cliente=in.(${idsNorm.join(',')})`);
+  const resumo = {};
+  if(Array.isArray(data)) {
+    const hoje = new Date(); hoje.setHours(0,0,0,0);
+    data.forEach(conta => {
+      const idCliente = Number(conta.id_cliente);
+      const original = Number(conta.valor_original || 0);
+      const recebido = Math.min(original, Math.max(0, Number(conta.valor_recebido || 0)));
+      const saldo = Math.max(0, original - recebido);
+      const aberto = saldo > 0.005 && (conta.status_recebimento || '').toUpperCase() !== 'RECEBIDO';
+      const vencido = aberto && conta.data_vencimento && contasDateLocal(conta.data_vencimento) < hoje;
+      if(!resumo[idCliente]) resumo[idCliente] = { temVencido:false, totalAberto:0 };
+      if(aberto) resumo[idCliente].totalAberto += saldo;
+      if(vencido) resumo[idCliente].temVencido = true;
+    });
+  }
+  cacheResumoContasVendas = resumo;
+  cacheResumoContasVendasIds = idsNorm;
+  return resumo;
+}
+
+function cardVenda(c, resumoContas={}) {
   const se = (c.status_entrega||'').toUpperCase();
   const statusColor = se==='ENTREGUE'?'on':se==='CANCELADO'?'off':'warn';
   const slabel = se==='ENTREGUE'?'Entregue':se==='CANCELADO'?'Cancelado':'Pendente';
   const nomeCliente = c.clientes?.nome_fantasia||c.clientes?.razao_social||'';
+  const resumoCliente = resumoContas[Number(c.id_cliente)] || {};
+  const temTitulosVencidos = !!resumoCliente.temVencido;
+  const valorAberto = Number(resumoCliente.totalAberto || 0);
+  const nomeColor = temTitulosVencidos ? 'var(--danger)' : 'var(--text)';
   const dtV = c.data_venda ? new Date(c.data_venda).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '';
   const dtE = c.data_entrega ? new Date(c.data_entrega).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '';
   const valorFinal = Number(c.valor_final||0);
@@ -125,12 +198,16 @@ function cardVenda(c) {
   const temLucro = valorCusto > 0;
   const lucroColor = lucro >= 0 ? '#22c55e' : '#ef4444';
   const valorVenda = valorFinal > 0 ? 'R$ '+valorFinal.toFixed(2) : '';
+  const valorPrefix = valorAberto > 0.005 ? `<span style="color:${temTitulosVencidos?'var(--danger)':'var(--accent)'};font-family:var(--mono);font-size:10px;margin-right:6px;">${fmtResumoFinanceiro(valorAberto)}</span>` : '';
   return `<div class="item-card ${currentId===c.id_venda?'active':''}" onclick="openItem(${c.id_venda})">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
       <span style="font-size:13px;font-weight:500;font-family:var(--mono);color:var(--accent);">${c.codigo_venda||'#'+c.id_venda}</span>
       <span class="pill ${statusColor}" style="font-size:9px;padding:1px 6px;">${slabel}</span>
     </div>
-    <div style="font-size:12px;color:var(--text);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nomeCliente}</div>
+    <div style="font-size:12px;color:${nomeColor};margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;">
+      ${valorPrefix}
+      <span>${nomeCliente}</span>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
       <span style="font-size:10px;color:var(--text3);">🛒${dtV}${dtE?' 📦'+dtE:''}</span>
       <span style="font-size:11px;font-weight:600;color:var(--accent);font-family:var(--mono);">${valorVenda}</span>
@@ -141,7 +218,7 @@ function cardVenda(c) {
   </div>`;
 }
 
-function renderListVendas(el) {
+async function renderListVendas(el) {
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const hojeStr = hoje.toISOString().slice(0,10);
   const semana = new Date(hoje.getTime()-7*864e5).toISOString().slice(0,10);
@@ -151,10 +228,14 @@ function renderListVendas(el) {
   const pendentes = filtered.filter(v=>v.status_entrega!=='ENTREGUE'&&v.status_entrega!=='CANCELADO');
   const entregues = filtered.filter(v=>v.status_entrega==='ENTREGUE'||v.status_entrega==='CANCELADO');
 
-  // Filtrar entregues conforme filtro selecionado
+  const buscando = buscaLateralAtiva();
+
+  // Filtrar entregues conforme filtro selecionado. Durante busca, mostrar todos os resultados encontrados.
   let entreguesFiltrados = [];
   let btnLabel = '';
-  if(vendaFiltro==='padrao') {
+  if(buscando) {
+    entreguesFiltrados = entregues;
+  } else if(vendaFiltro==='padrao') {
     entreguesFiltrados = entregues.filter(v=>(v.data_entrega||v.data_venda||'').slice(0,10)===hojeStr);
     btnLabel = null; // mostrar botões
   } else if(vendaFiltro==='semana') {
@@ -168,24 +249,26 @@ function renderListVendas(el) {
   }
 
   let html = '';
+  const idsClientes = [...new Set(filtered.map(v=>Number(v.id_cliente||0)).filter(Boolean))];
+  const resumoContas = idsClientes.length ? await carregarResumoContasVendas(idsClientes) : {};
 
   // Pendentes
   if(pendentes.length) {
     html += `<div style="font-size:10px;color:var(--warn);font-family:var(--mono);padding:8px 12px 4px;letter-spacing:.05em;font-weight:600;">⏳ PENDENTES (${pendentes.length})</div>`;
-    html += pendentes.map(c=>cardVenda(c)).join('');
+    html += pendentes.map(c=>cardVenda(c, resumoContas)).join('');
   }
 
   // Entregues
-  const labelEntregues = vendaFiltro==='padrao'?'HOJE':vendaFiltro==='semana'?'ÚLTIMOS 7 DIAS':vendaFiltro==='mes'?'ESTE MÊS':vendaFiltro==='ano'?'ESTE ANO':'TODOS';
+  const labelEntregues = buscando ? 'RESULTADOS' : vendaFiltro==='padrao'?'HOJE':vendaFiltro==='semana'?'ULTIMOS 7 DIAS':vendaFiltro==='mes'?'ESTE MES':vendaFiltro==='ano'?'ESTE ANO':'TODOS';
   if(entreguesFiltrados.length) {
     html += `<div style="font-size:10px;color:var(--text3);font-family:var(--mono);padding:8px 12px 4px;letter-spacing:.05em;border-top:1px solid var(--border);margin-top:6px;">✅ ENTREGUES — ${labelEntregues} (${entreguesFiltrados.length})</div>`;
-    html += entreguesFiltrados.map(c=>cardVenda(c)).join('');
+    html += entreguesFiltrados.map(c=>cardVenda(c, resumoContas)).join('');
   } else if(vendaFiltro==='padrao' && entregues.length > 0) {
     html += `<div style="font-size:11px;color:var(--text3);padding:8px 12px;border-top:1px solid var(--border);margin-top:6px;">Nenhuma entrega hoje</div>`;
   }
 
   // Botões de filtro
-  html += `<div style="padding:10px 8px;border-top:1px solid var(--border);margin-top:6px;">
+  if(!buscando) html += `<div style="padding:10px 8px;border-top:1px solid var(--border);margin-top:6px;">
     <div style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-bottom:6px;">MOSTRAR ENTREGUES:</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
       ${['padrao','semana','mes','ano','todos'].map((f,i)=>{
@@ -198,43 +281,185 @@ function renderListVendas(el) {
   el.innerHTML = html || '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Nenhuma venda</div>';
 }
 
+function buscaLateralAtiva() {
+  return !!normalizarBusca(document.getElementById('search-input')?.value || '');
+}
+
+function normalizarBusca(valor) {
+  return String(valor ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function valorCampoBusca(obj, campo) {
+  if(campo === 'fornecedor_nome') {
+    const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(obj.id_fornecedor));
+    return [forn?.nome_fantasia, forn?.razao_social].filter(Boolean).join(' ');
+  }
+  return String(campo).split('.').reduce((valor, parte) => valor == null ? '' : valor[parte], obj);
+}
+
+function itemContemBusca(item, termo, fields) {
+  return fields.some(f => normalizarBusca(valorCampoBusca(item, f)).includes(termo));
+}
+
+function contaReceberAberta(c) {
+  if(typeof contasValorAberto === 'function') return contasValorAberto(c) > 0.005;
+  const original = Number(c?.valor_original || 0);
+  const recebido = Math.min(original, Math.max(0, Number(c?.valor_recebido || 0)));
+  return c?.status_recebimento !== 'RECEBIDO' && Math.max(0, original - recebido) > 0.005;
+}
+
+function mostrarContasCliente(idCliente) {
+  if(!idCliente) return;
+  contasReceberClienteFiltro = Number(idCliente);
+  filterItems();
+}
+
+function limparFiltroClienteContasReceber() {
+  contasReceberClienteFiltro = null;
+  filterItems();
+}
+
+function somaContasAbertasCliente(lista, idCliente) {
+  return (lista || []).filter(c => Number(c.id_cliente) === Number(idCliente) && contaReceberAberta(c)).reduce((s, c) => s + contasValorAberto(c), 0);
+}
+
+function filtrarLateralContasReceber(lista, termo='') {
+  const fields = tabConfig.contas_receber.searchFields;
+  const base = contasReceberClienteFiltro
+    ? lista.filter(c => contaReceberAberta(c) && Number(c.id_cliente) === Number(contasReceberClienteFiltro))
+    : (contasReceberMostrarTodos ? [...lista] : lista.filter(contaReceberAberta));
+  return termo ? base.filter(c=>itemContemBusca(c, termo, fields)) : base;
+}
+
+function toggleLateralContasReceber() {
+  contasReceberMostrarTodos = !contasReceberMostrarTodos;
+  filterItems();
+}
+
 function filterItems() {
-  const q=document.getElementById('search-input').value.toLowerCase();
+  const q=normalizarBusca(document.getElementById('search-input').value);
   const fields=tabConfig[currentTab].searchFields;
-  filtered=!q?[...items]:items.filter(c=>fields.some(f=>(c[f]||'').toLowerCase().includes(q)));
+  if(currentTab === 'contas_receber') filtered = filtrarLateralContasReceber(items, q);
+  else filtered=!q?[...items]:items.filter(c=>itemContemBusca(c, q, fields));
   renderList();
+}
+
+function fmtResumoFinanceiro(valor) {
+  return 'R$ ' + Number(valor || 0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function dataPuraLocal(value) {
+  const raw = String(value || '').slice(0,10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(value);
+}
+
+function dataPuraBR(value) {
+  const d = dataPuraLocal(value);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('pt-BR');
+}
+
+function resumoListaFinanceira() {
+  if(currentTab === 'contas_receber') {
+    const recebido = items.reduce((s,c)=>s + Number(c.status_recebimento === 'RECEBIDO' ? (c.valor_recebido || c.valor_original || 0) : (c.valor_recebido || 0)), 0);
+    const aReceber = items.reduce((s,c)=>{
+      if(c.status_recebimento === 'RECEBIDO' || c.status_recebimento === 'CANCELADO') return s;
+      return s + Math.max(0, Number(c.valor_original || 0) - Number(c.valor_recebido || 0));
+    }, 0);
+    const abertas = items.filter(contaReceberAberta).length;
+    const total = items.length;
+    const clienteResumo = contasReceberClienteFiltro ? (() => {
+      const contasCliente = items.filter(c => contaReceberAberta(c) && Number(c.id_cliente) === Number(contasReceberClienteFiltro));
+      const nomeCliente = contasCliente[0]?.clientes?.nome_fantasia || contasCliente[0]?.clientes?.razao_social || `Cliente #${contasReceberClienteFiltro}`;
+      const totalCliente = contasCliente.reduce((s,c) => s + contasValorAberto(c), 0);
+      return { nomeCliente, totalCliente };
+    })() : null;
+    return `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasReceberClienteFiltro ? 'Visão do cliente' : 'Resumo geral'}</div>
+          <button onclick="${contasReceberClienteFiltro ? 'limparFiltroClienteContasReceber()' : 'toggleLateralContasReceber()'}" style="background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:10px;padding:4px 8px;cursor:pointer;">${contasReceberClienteFiltro ? '↺ Mostrar todos' : (contasReceberMostrarTodos?'Ver abertos':'Ver todos')}</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr;gap:6px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Recebido</span><strong style="color:var(--accent2);font-family:var(--mono);">${fmtResumoFinanceiro(recebido)}</strong></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A receber</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aReceber)}</strong></div>
+          <div style="font-size:10px;color:var(--text3);">${contasReceberClienteFiltro ? `${clienteResumo.nomeCliente} • ${fmtResumoFinanceiro(clienteResumo.totalCliente)} em aberto` : (contasReceberMostrarTodos ? `${total} conta${total!==1?'s':''} na lateral` : `${abertas} em aberto na lateral`)}</div>
+        </div>
+      </div>`;
+  }
+  if(currentTab === 'contas_pagar') {
+    const pago = filtered.reduce((s,c)=>s + Number(c.status_pagamento === 'PAGO' ? (c.valor_pago || c.valor_original || 0) : (c.valor_pago || 0)), 0);
+    const aPagar = filtered.reduce((s,c)=>{
+      if(c.status_pagamento === 'PAGO' || c.status_pagamento === 'CANCELADO') return s;
+      return s + Math.max(0, Number(c.valor_original || 0) - Number(c.valor_pago || 0));
+    }, 0);
+    return `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
+        <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;margin-bottom:8px;">Resumo da pesquisa</div>
+        <div style="display:grid;grid-template-columns:1fr;gap:6px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Pago</span><strong style="color:var(--accent2);font-family:var(--mono);">${fmtResumoFinanceiro(pago)}</strong></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A pagar</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aPagar)}</strong></div>
+        </div>
+      </div>`;
+  }
+  return '';
 }
 
 let vendaFiltro = 'padrao'; // padrao | semana | mes | ano | todos
 
-function renderList() {
+async function renderList() {
   const el=document.getElementById('item-list');
   const cfg=tabConfig[currentTab];
-  if(!filtered.length){ el.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Nenhum encontrado</div>'; return; }
 
   // VENDAS: lógica especial
   if(currentTab==='vendas') {
-    renderListVendas(el);
+    await renderListVendas(el);
     return;
   }
-  el.innerHTML=filtered.map(c=>{
+  const resumoFinanceiro = resumoListaFinanceira();
+  if(!filtered.length){
+    let emptyHtml = resumoFinanceiro + '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Nenhum encontrado</div>';
+    if(currentTab==='contas_receber' && contasReceberClienteFiltro) {
+      emptyHtml += `<div style="padding:8px 0 0;"><button type="button" onclick="limparFiltroClienteContasReceber()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);padding:8px 10px;font-size:11px;cursor:pointer;">↺ Mostrar todos</button></div>`;
+    }
+    el.innerHTML = emptyHtml;
+    return;
+  }
+  let listaHtml = filtered.map(c=>{
     let nome='',sub='',pills='';
     if(currentTab==='contas_receber'){
-      const venc = new Date(c.data_vencimento);
+      const venc = dataPuraLocal(c.data_vencimento);
       const hoje = new Date();
-      const atrasado = c.status_recebimento!=='RECEBIDO' && venc < hoje;
+      const original = Number(c.valor_original || 0);
+      const recebido = Math.min(original, Math.max(0, Number(c.valor_recebido || 0)));
+      const saldo = Math.max(0, original - recebido);
+      const atrasado = saldo > 0.005 && venc < hoje;
       nome = c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${c.id_cliente}`;
-      sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} - Venc: ${venc.toLocaleDateString('pt-BR')} - R$ ${Number(c.valor_original||0).toFixed(2)}`;
-      const sc = c.status_recebimento==='RECEBIDO'?'on':atrasado?'vencido':'warn';
-      const slabel = c.status_recebimento==='RECEBIDO'?'RECEBIDO':atrasado?'VENCIDO':'PENDENTE';
+      const dataVenda = c.data_venda ? dataPuraBR(c.data_venda) : '-';
+      sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} (${dataVenda}) - Venc: ${dataPuraBR(c.data_vencimento)} - Saldo R$ ${saldo.toFixed(2)} - Rec. R$ ${recebido.toFixed(2)}`;
+      const sc = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'on' : atrasado ? 'vencido' : 'warn';
+      const slabel = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'RECEBIDO' : recebido > 0.005 ? 'PARCIAL' : atrasado ? 'VENCIDO' : 'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
+      const totalCliente = somaContasAbertasCliente(items, c.id_cliente);
+      const btnCliente = saldo > 0.005 ? `<button type="button" onclick="event.stopPropagation(); mostrarContasCliente(${c.id_cliente});" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text2);padding:4px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">👁 ${totalCliente > 0.005 ? fmtResumoFinanceiro(totalCliente) : 'Ver cliente'}</button>` : '';
+      return `<div class="item-card ${currentId===c[cfg.id]?'active':''}" onclick="openItem(${c[cfg.id]})">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+          <div style="min-width:0;flex:1;">
+            <div class="item-name">${nome}</div>
+            <div class="item-sub">${pills}<span>${sub}</span></div>
+          </div>
+          ${btnCliente}
+        </div>
+      </div>`;
     } else if(currentTab==='contas_pagar'){
-      const venc = new Date(c.data_vencimento);
+      const venc = dataPuraLocal(c.data_vencimento);
       const hoje = new Date();
       const atrasado = c.status_pagamento!=='PAGO' && venc < hoje;
       const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c.id_fornecedor));
       nome = forn?.nome_fantasia||forn?.razao_social||`Fornecedor #${c.id_fornecedor}`;
-      sub = `Venc: ${venc.toLocaleDateString('pt-BR')} · R$ ${Number(c.valor_original||0).toFixed(2)}`;
+      const docCompra = c.compras?.codigo_compra || (c.id_compra ? '#'+c.id_compra : '#'+c.id_conta_pagar);
+      const dataCompra = c.compras?.data_compra ? dataPuraBR(c.compras.data_compra) : '-';
+      sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)} - R$ ${Number(c.valor_original||0).toFixed(2)}`;
       const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
@@ -274,6 +499,12 @@ function renderList() {
       <div class="item-sub">${pills}<span>${sub}</span></div>
     </div>`;
   }).join('');
+  if(currentTab==='contas_receber' && contasReceberClienteFiltro) {
+    listaHtml += `<div style="padding:8px 0 0;">
+      <button type="button" onclick="limparFiltroClienteContasReceber()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);padding:8px 10px;font-size:11px;cursor:pointer;">↺ Mostrar todos</button>
+    </div>`;
+  }
+  el.innerHTML = resumoFinanceiro + listaHtml;
 }
 
 function openItem(id) {
@@ -327,10 +558,16 @@ async function cancelForm() {
     await renderDashboardContas();
   } else if(currentTab==='compras') {
     await renderDashboardCompras();
+  } else if(currentTab==='contas_pagar') {
+    await renderDashboardContasPagar();
   } else if(currentTab==='kardex') {
     await renderKardex();
   } else if(currentTab==='clientes') {
     await renderDashboardClientes();
+  } else if(currentTab==='fornecedores') {
+    await renderDashboardFornecedores();
+  } else if(currentTab==='produtos_tab') {
+    await renderDashboardProdutos();
   } else {
     const cfg=tabConfig[currentTab];
     document.getElementById('content-body').innerHTML=`<div class="empty-state"><div class="empty-icon">📋</div><p>Selecione um ${cfg.label.toLowerCase()} ou crie um novo</p></div>`;

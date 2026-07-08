@@ -5,6 +5,100 @@ function compraFmt(n) {
   return 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
+function contaPagarDateLocal(value) {
+  const raw = String(value||'').slice(0,10);
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return value ? new Date(value) : new Date(NaN);
+}
+
+function contaPagarAberto(c) {
+  return Math.max(0, Number(c.valor_original||0) - Number(c.valor_pago||0));
+}
+
+async function renderDashboardContasPagar() {
+  const body = document.getElementById('content-body');
+  body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando contas a pagar...</div>';
+
+  await loadCaches();
+  const contas = await apiGet('contas_pagar?select=*&order=data_vencimento.asc,id_conta_pagar.asc');
+  if(!Array.isArray(contas)) {
+    body.innerHTML = '<div class="empty-state"><div class="empty-icon">!</div><p>Erro ao carregar contas a pagar</p></div>';
+    return;
+  }
+
+  await anexarDadosCompraContasPagar(contas);
+  items = contas;
+  filtered = [...items];
+  renderList();
+  const badge = document.getElementById('badge-contas_pagar');
+  if(badge) badge.textContent = items.length;
+  const footer = document.getElementById('sidebar-footer');
+  if(footer) footer.textContent = `${items.length} contas a pagar`;
+
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const amanha = new Date(hoje.getTime()+864e5);
+  const seteDias = new Date(hoje.getTime()+7*864e5);
+  const pendentes = contas.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
+  const pagas = contas.filter(c=>c.status_pagamento === 'PAGO');
+  const vencidas = pendentes.filter(c=>contaPagarDateLocal(c.data_vencimento) < hoje);
+  const pagarHoje = pendentes.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return d>=hoje && d<amanha; });
+  const proximos7 = pendentes.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return d>=hoje && d<=seteDias; });
+  const somaAberto = arr => arr.reduce((s,c)=>s+contaPagarAberto(c),0);
+  const somaPago = arr => arr.reduce((s,c)=>s+Number(c.valor_pago||c.valor_original||0),0);
+  const card = (filtro, label, valor, qtd, cor) => `
+    <button class="dash-card" onclick="listarContasPagarDash('${filtro}')" style="text-align:left;cursor:pointer;">
+      <div class="dash-card-label">${label}</div>
+      <div class="dash-card-value" style="font-size:20px;line-height:1.15;color:${cor};">${compraFmt(valor)}</div>
+      <div class="dash-card-sub">${qtd} conta${qtd!==1?'s':''}</div>
+    </button>`;
+
+  body.innerHTML = `
+    <div class="dash-grid">
+      ${card('pendente','A Pagar',somaAberto(pendentes),pendentes.length,'var(--warn)')}
+      ${card('hoje','Vence Hoje',somaAberto(pagarHoje),pagarHoje.length,'var(--accent2)')}
+      ${card('7dias','Proximos 7 Dias',somaAberto(proximos7),proximos7.length,'var(--accent)')}
+      ${card('vencido','Vencidas',somaAberto(vencidas),vencidas.length,'var(--danger)')}
+      ${card('pago','Pago',somaPago(pagas),pagas.length,'var(--accent)')}
+    </div>
+
+    <div class="dash-chart-box" style="margin-bottom:20px;">
+      <div class="dash-chart-title"><span>Contas a Pagar</span></div>
+      <div class="dash-list">
+        ${contas.length ? contas.slice(0,12).map(c=>{
+          const compra = c.compras || {};
+          const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c.id_fornecedor));
+          const status = c.status_pagamento || 'PENDENTE';
+          const cor = status==='PAGO' ? 'var(--accent)' : (contaPagarDateLocal(c.data_vencimento)<hoje ? 'var(--danger)' : 'var(--warn)');
+          return `<div class="dash-list-item" onclick="openItem(${c.id_conta_pagar})">
+            <span class="dash-list-rank" style="color:${cor};">${status==='PAGO'?'OK':'R$'}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <span class="dash-list-name">${forn?.nome_fantasia||forn?.razao_social||'Fornecedor'}</span>
+                <span class="dash-list-value" style="color:${cor};">${compraFmt(status==='PAGO' ? (c.valor_pago||c.valor_original) : contaPagarAberto(c))}</span>
+              </div>
+              <div style="font-size:11px;color:var(--text2);">Doc: ${compra.codigo_compra || (c.id_compra ? '#'+c.id_compra : '#'+c.id_conta_pagar)} (${compra.data_compra ? dataPuraBR(compra.data_compra) : '-'}) - Venc: ${dataPuraBR(c.data_vencimento)}</div>
+            </div>
+          </div>`;
+        }).join('') : '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;">Nenhum lancamento em contas a pagar</div>'}
+      </div>
+    </div>`;
+}
+
+function listarContasPagarDash(filtro) {
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const amanha = new Date(hoje.getTime()+864e5);
+  const seteDias = new Date(hoje.getTime()+7*864e5);
+  let lista = [...items];
+  if(filtro==='pendente') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
+  else if(filtro==='pago') lista = lista.filter(c=>c.status_pagamento === 'PAGO');
+  else if(filtro==='vencido') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && contaPagarDateLocal(c.data_vencimento) < hoje);
+  else if(filtro==='hoje') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<amanha; });
+  else if(filtro==='7dias') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<=seteDias; });
+  filtered = lista;
+  renderList();
+}
+
 async function renderDashboardCompras() {
   const body = document.getElementById('content-body');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
@@ -570,6 +664,29 @@ async function confirmarLiberacaoCompra(idCompra) {
     const estoqueAtual = estoqueAnterior + Number(item.quantidade||0);
     const precoCusto = Number(document.getElementById(`lib-custo-${item.id_produto}`)?.value||item.preco_entrada||0);
     const precoVenda = Number(document.getElementById(`lib-venda-${item.id_produto}`)?.value||0);
+    const custoAnterior = Number(produto.preco_custo || 0);
+    const custoMudou = Math.abs(precoCusto - custoAnterior) >= 0.005;
+    let dataBaseCusto = '';
+    if(custoMudou) {
+      const sugestao = (compra.data_compra || '').slice(0,10);
+      dataBaseCusto = prompt(
+        `O custo de ${item.nome_produto} mudou de R$ ${custoAnterior.toFixed(2)} para R$ ${precoCusto.toFixed(2)}.\n\n` +
+        'A partir de qual data-base esse custo deve ser aplicado aos pedidos ja lancados?\n' +
+        'Use AAAA-MM-DD. Vendas futuras nao serao alteradas.\n\n' +
+        'Deixe em branco para apenas atualizar o cadastro do produto.',
+        sugestao
+      );
+      if(dataBaseCusto === null) {
+        if(btn){ btn.disabled = false; btn.textContent = 'Liberar'; }
+        return;
+      }
+      dataBaseCusto = dataBaseCusto.trim();
+      if(dataBaseCusto && !/^\d{4}-\d{2}-\d{2}$/.test(dataBaseCusto)) {
+        toast('Data-base invalida. Use o formato AAAA-MM-DD.','error');
+        if(btn){ btn.disabled = false; btn.textContent = 'Liberar'; }
+        return;
+      }
+    }
     const prodRes = await apiPatch(`produtos?id_produto=eq.${item.id_produto}`,{
       estoque_atual: estoqueAtual,
       preco_custo: precoCusto,
@@ -579,6 +696,13 @@ async function confirmarLiberacaoCompra(idCompra) {
       for(const b of backups) await apiPatch(`produtos?id_produto=eq.${b.id_produto}`,{estoque_atual:b.estoque_anterior});
       toast('Erro ao atualizar produto: '+(prodRes.data?.message||'erro'),'error');
       return;
+    }
+    if(custoMudou && dataBaseCusto && typeof aplicarCustoProdutoEmVendas === 'function') {
+      try {
+        await aplicarCustoProdutoEmVendas(item.id_produto, custoAnterior, precoCusto, dataBaseCusto);
+      } catch(err) {
+        toast('Produto atualizado, mas erro ao ajustar custos antigos: '+(err.message||err),'error');
+      }
     }
     backups.push({id_produto:item.id_produto, estoque_anterior:estoqueAnterior});
     await apiPatch(`compra_itens?id_item_compra=eq.${item.id_item_compra}`,{

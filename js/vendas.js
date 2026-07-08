@@ -522,6 +522,68 @@ function pagamentoVenceNaDataDaVenda(pagamento) {
   return ['PIX','DINHEIRO','CARTAO'].includes(String(pagamento||'').toUpperCase());
 }
 
+function formatarMoedaVenda(valor) {
+  return 'R$ ' + Number(valor || 0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function parseDataLocalVenda(value) {
+  const raw = String(value || '').slice(0,10);
+  if(!raw) return null;
+  const [ano, mes, dia] = raw.split('-').map(Number);
+  const d = new Date(ano, mes - 1, dia);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+async function verificarContasClienteVenda() {
+  if(!isNew) return;
+  const idCliente = document.getElementById('f-id_cliente')?.value;
+  const alerta = document.getElementById('contas-cliente-alert');
+  if(!idCliente || !alerta) return;
+
+  try {
+    const contas = await apiGet(`contas_receber?select=id_conta,valor_original,valor_recebido,status_recebimento,data_vencimento&id_cliente=eq.${idCliente}`);
+    if(!Array.isArray(contas) || !contas.length) {
+      alerta.style.display = 'none';
+      alerta.innerHTML = '';
+      return;
+    }
+
+    const hoje = new Date(); hoje.setHours(0,0,0,0);
+    let vencido = 0;
+    let aberto = 0;
+
+    contas.forEach(conta => {
+      const original = Number(conta.valor_original || 0);
+      const recebido = Math.min(original, Math.max(0, Number(conta.valor_recebido || 0)));
+      const saldo = Math.max(0, original - recebido);
+      const status = String(conta.status_recebimento || '').toUpperCase();
+      const estaAberto = saldo > 0.005 && status !== 'RECEBIDO';
+      if(!estaAberto) return;
+      aberto += saldo;
+      if(conta.data_vencimento && parseDataLocalVenda(conta.data_vencimento) && parseDataLocalVenda(conta.data_vencimento) < hoje) {
+        vencido += saldo;
+      }
+    });
+
+    if(vencido <= 0.005 && aberto <= 0.005) {
+      alerta.style.display = 'none';
+      alerta.innerHTML = '';
+      return;
+    }
+
+    alerta.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px;">⚠️ Cliente com contas a receber</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;">
+        ${vencido > 0.005 ? `<span style="color:var(--danger);">Vencidas: ${formatarMoedaVenda(vencido)}</span>` : ''}
+        ${aberto > 0.005 ? `<span style="color:var(--warn);">Em aberto: ${formatarMoedaVenda(aberto)}</span>` : ''}
+      </div>`;
+    alerta.style.display = 'block';
+  } catch (err) {
+    alerta.style.display = 'none';
+    alerta.innerHTML = '';
+  }
+}
+
 async function renderFormVenda(c) {
   await loadCaches();
   await loadCacheCobrancas();
@@ -529,12 +591,14 @@ async function renderFormVenda(c) {
 
   // Carregar itens existentes se for edição
   if(c) {
-    const itens = await apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria,id_produto,preco_custo)&id_venda=eq.${c.id_venda}`);
+    const itens = await apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria,id_produto,preco_custo,unidade,quantidade_fardo)&id_venda=eq.${c.id_venda}`);
     if(Array.isArray(itens)) {
       itensVenda = itens.map(i => ({
         id_item: i.id_item,
         id_produto: i.id_produto,
         nome_produto: i.produtos?.nome_mercadoria || '',
+        unidade: i.produtos?.unidade || '',
+        quantidade_fardo: i.produtos?.quantidade_fardo || null,
         quantidade: Number(i.quantidade),
         preco_unitario: Number(i.preco_unitario),
         desconto_item: Number(i.desconto_item||0),
@@ -590,10 +654,11 @@ async function renderFormVenda(c) {
     <div class="form-grid compact">
       <div class="form-group wide">
         <label class="form-label">Cliente *</label>
-        <select class="form-input form-select" id="f-id_cliente" onchange="aplicarPadraoClienteVenda(true)">
+        <select class="form-input form-select" id="f-id_cliente" onchange="aplicarPadraoClienteVenda(true); verificarContasClienteVenda();">
           <option value="">Selecione o cliente...</option>
           ${cliOpts}
         </select>
+        <div id="contas-cliente-alert" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:rgba(245,158,11,0.12);color:var(--text);"></div>
       </div>
       <div class="form-group">
         <label class="form-label">Venda *</label>
@@ -701,11 +766,54 @@ async function renderFormVenda(c) {
       <button class="btn btn-primary" id="btn-save" onclick="saveVenda()">${isNew?'+ Registrar Venda':'✓ Salvar Alterações'}</button>
       ${entregaActions}
       ${ticketAction}
+      ${isNew ? '' : `<button class="btn btn-danger" style="margin-left:auto;" onclick="confirmDeleteVenda(${c.id_venda})">✖ Excluir Venda</button>`}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
     </div></div>`;
 
   renderItens();
   calcTotais();
+  decorarProdutosVenda();
+}
+
+function produtoVendaComposicao(p) {
+  const qtd = Number(p?.quantidade_fardo || 0);
+  if(qtd <= 0) return '';
+  return `${qtd.toLocaleString('pt-BR',{maximumFractionDigits:2})} ${p?.unidade || 'UN'}`;
+}
+
+function produtoVendaOptionLabel(p) {
+  const comp = produtoVendaComposicao(p);
+  const estoque = Number(p?.estoque_atual || 0).toLocaleString('pt-BR',{maximumFractionDigits:2});
+  return `${p.nome_mercadoria}${comp ? ` (${comp} por caixa/fardo)` : ''} - Est: ${estoque} - R$ ${Number(p.preco_venda||0).toFixed(2)}`;
+}
+
+function produtoVendaDescricao(p) {
+  const comp = produtoVendaComposicao(p);
+  return comp ? `Composicao: ${comp} por caixa/fardo` : '';
+}
+
+function atualizarInfoProdutoVenda() {
+  const idProduto = document.getElementById('item-produto')?.value;
+  const produto = cacheProdutos.find(p=>String(p.id_produto)===String(idProduto));
+  const el = document.getElementById('item-produto-info');
+  if(el) el.textContent = produtoVendaDescricao(produto);
+}
+
+function decorarProdutosVenda() {
+  const sel = document.getElementById('item-produto');
+  if(!sel) return;
+  [...sel.options].forEach(opt => {
+    if(!opt.value) return;
+    const produto = cacheProdutos.find(p=>String(p.id_produto)===String(opt.value));
+    if(produto) {
+      opt.textContent = produtoVendaOptionLabel(produto);
+      opt.dataset.nome = produto.nome_mercadoria || '';
+    }
+  });
+  if(!document.getElementById('item-produto-info')) {
+    sel.insertAdjacentHTML('afterend','<div id="item-produto-info" style="font-size:11px;color:var(--text2);margin-top:5px;min-height:16px;"></div>');
+  }
+  atualizarInfoProdutoVenda();
 }
 
 function preencherPreco() {
@@ -713,6 +821,7 @@ function preencherPreco() {
   const opt = sel.options[sel.selectedIndex];
   const preco = opt?.dataset?.preco || '';
   document.getElementById('item-preco').value = preco ? Number(preco).toFixed(2) : '';
+  atualizarInfoProdutoVenda();
   calcItemSubtotal();
 
   // Verificar preço especial para o cliente
@@ -744,6 +853,7 @@ async function aplicarPadraoClienteVenda(forcar=false) {
     if(parcelas && ultima.quantidade_parcelas) parcelas.value = Math.max(1, Number(ultima.quantidade_parcelas));
     if(dias && ultima.dias_vencimento !== null && ultima.dias_vencimento !== undefined) dias.value = Math.max(0, Number(ultima.dias_vencimento));
     calcularVencimentoVenda();
+    await verificarContasClienteVenda();
     return;
   }
 
@@ -751,6 +861,7 @@ async function aplicarPadraoClienteVenda(forcar=false) {
   if(pagamento && cliente?.meio_pagamento_padrao) pagamento.value = cliente.meio_pagamento_padrao;
   if(parcelas && cliente?.parcelas_padrao) parcelas.value = cliente.parcelas_padrao;
   calcularVencimentoVenda();
+  await verificarContasClienteVenda();
 }
 
 function calcItemSubtotal() {
@@ -777,7 +888,17 @@ function adicionarItem() {
   const subtotal = Math.max(0,(qty*preco)-desc);
   const prodCache = cacheProdutos.find(p=>String(p.id_produto)===String(idProd));
   const precoCusto = prodCache ? Number(prodCache.preco_custo||0) : 0;
-  itensVenda.push({ id_produto:parseInt(idProd), nome_produto:nomeProd, quantidade:qty, preco_unitario:preco, desconto_item:desc, subtotal, preco_custo:precoCusto });
+  itensVenda.push({
+    id_produto:parseInt(idProd),
+    nome_produto:prodCache?.nome_mercadoria || nomeProd,
+    unidade: prodCache?.unidade || '',
+    quantidade_fardo: prodCache?.quantidade_fardo || null,
+    quantidade:qty,
+    preco_unitario:preco,
+    desconto_item:desc,
+    subtotal,
+    preco_custo:precoCusto
+  });
 
   // Limpar campos
   document.getElementById('item-produto').value='';
@@ -785,6 +906,7 @@ function adicionarItem() {
   document.getElementById('item-preco').value='';
   document.getElementById('item-desconto').value='0';
   document.getElementById('item-subtotal').value='R$ 0,00';
+  atualizarInfoProdutoVenda();
 
   renderItens();
   calcTotais();
@@ -817,8 +939,9 @@ function renderItens() {
           const custoTotal = custo * Number(item.quantidade);
           const lucroItem = Number(item.subtotal) - custoTotal;
           const lucroColor = lucroItem >= 0 ? 'var(--success,#22c55e)' : 'var(--danger)';
+          const composicao = produtoVendaDescricao(item);
           return `<tr style="border-top:1px solid var(--border);">
-          <td style="padding:6px 8px;color:var(--text);">${item.nome_produto||item.produtos?.nome_mercadoria||'Produto'}</td>
+          <td style="padding:6px 8px;color:var(--text);">${item.nome_produto||item.produtos?.nome_mercadoria||'Produto'}${composicao?`<div style="font-size:10px;color:var(--text3);margin-top:2px;">${composicao}</div>`:''}</td>
           <td style="padding:6px 8px;text-align:center;color:var(--text);">${item.quantidade}</td>
           <td style="padding:6px 8px;text-align:right;color:var(--text2);font-size:11px;">${custo>0?'R$ '+custo.toFixed(2):'-'}</td>
           <td style="padding:6px 8px;text-align:right;color:var(--text);">R$ ${Number(item.preco_unitario).toFixed(2)}</td>
@@ -834,7 +957,8 @@ function renderItens() {
 
 function calcTotais() {
   const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
-  const totalCusto = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
+  const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
+  const totalCusto = isNew ? totalCustoCalculado : Number(items.find(x=>Number(x.id_venda)===Number(currentId))?.valor_produtos || 0);
   const desconto = parseFloat(document.getElementById('f-desconto_total')?.value||0);
   const final = Math.max(0,totalProd-desconto);
   const lucro = final - totalCusto;
@@ -1330,9 +1454,11 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
   const dias = Math.max(0, parseInt(opcoes.dias_vencimento ?? venda?.dias_vencimento ?? '0',10)||0);
   const totalParcelas = pagamentoRecebido ? 1 : parcelas;
   const valorBase = Math.floor((valorConta / totalParcelas) * 100) / 100;
-  const vencBase = pagamentoVenceNaDataDaVenda(pagamento)
-    ? toLocalDateInput(venda?.data_entrega || venda?.data_venda || new Date())
-    : (opcoes.data_vencimento || venda?.data_vencimento || toLocalDateInput());
+  const vencBase = opcoes.data_vencimento
+    || venda?.data_vencimento
+    || (pagamentoVenceNaDataDaVenda(pagamento)
+      ? toLocalDateInput(venda?.data_entrega || venda?.data_venda || new Date())
+      : toLocalDateInput());
   const obs = (opcoes.observacoes || '').trim();
 
   const contasData = Array.from({length:totalParcelas}, (_,idx) => {
@@ -1370,7 +1496,8 @@ async function saveVenda() {
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
 
   const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
-  const totalCusto = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
+  const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
+  const totalCusto = isNew ? totalCustoCalculado : Number(items.find(x=>Number(x.id_venda)===Number(currentId))?.valor_produtos || 0);
   const desconto = parseFloat(document.getElementById('f-desconto_total').value||0);
   const final = Math.max(0,totalProd-desconto);
   const status = document.getElementById('f-status_entrega').value || 'PENDENTE';
@@ -1378,9 +1505,10 @@ async function saveVenda() {
   const meioPagamentoForm = document.getElementById('f-meio_pagamento').value || null;
   const vendaDataBase = (data_venda || toLocalDateTimeInput()).slice(0,10);
   const vencimentoForm = document.getElementById('f-data_vencimento').value || null;
-  const vencimentoSeguro = status === 'ENTREGUE' && pagamentoVenceNaDataDaVenda(meioPagamentoForm)
-    ? vendaDataBase
-    : (vencimentoForm || addDaysToDateInput(vendaDataBase, Math.max(0, parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0)));
+  const vencimentoSeguro = vencimentoForm
+    || (status === 'ENTREGUE' && pagamentoVenceNaDataDaVenda(meioPagamentoForm)
+      ? vendaDataBase
+      : addDaysToDateInput(vendaDataBase, Math.max(0, parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0)));
   if(status === 'ENTREGUE' && !meioPagamentoForm) {
     toast('Informe o meio de pagamento para venda entregue gerar financeiro.','error');
     return;
@@ -1559,21 +1687,24 @@ async function confirmarEntrega(idVenda) {
 
   // Atualizar venda
   const venda = items.find(x=>x.id_venda===idVenda);
-  const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`,{
+  const dataEntregaISO = localDateTimeToISO(dataEntrega) || new Date().toISOString();
+  const dadosEntrega = {
     status_entrega:'ENTREGUE',
-    data_entrega: localDateTimeToISO(dataEntrega) || new Date().toISOString(),
+    data_entrega: dataEntregaISO,
     meio_pagamento: pagamento,
     quantidade_parcelas: parcelasEntrega,
     dias_vencimento: diasEntrega,
     data_vencimento: vencimento||null
-  });
+  };
+  const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`, dadosEntrega);
   if(!vendaRes.ok) {
     toast('Erro ao confirmar entrega: '+(vendaRes.data?.message||'erro'),'error');
     if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
     return;
   }
 
-  const contaRes = await gerarContasReceberVenda(idVenda, venda, {
+  const vendaAtualizada = { ...venda, ...dadosEntrega };
+  const contaRes = await gerarContasReceberVenda(idVenda, vendaAtualizada, {
     meio_pagamento: pagamento,
     quantidade_parcelas: parcelasEntrega,
     dias_vencimento: diasEntrega,
@@ -1633,4 +1764,50 @@ async function cancelarEntrega(idVenda) {
 
   await loadItems();
   openItem(idVenda);
+}
+
+async function confirmDeleteVenda(idVenda) {
+  const venda = items.find(x => Number(x.id_venda) === Number(idVenda)) || {};
+  const codigo = venda.codigo_venda ? ` ${venda.codigo_venda}` : '';
+  const contas = await apiGet(`contas_receber?select=id_conta,valor_original,valor_recebido,status_recebimento&id_venda=eq.${idVenda}`);
+  const pago = Array.isArray(contas) && contas.some(c => c.status_recebimento === 'RECEBIDO' || Number(c.valor_recebido || 0) > 0);
+  let mensagem = `Excluir permanentemente a venda${codigo}? Isso devolverá estoque (se a entrega já foi confirmada) e excluirá todas as contas a receber vinculadas.`;
+  if(pago) {
+    mensagem += ' Há registro(s) de recebimento já marcado(s). Deseja continuar?';
+  }
+  if(!confirm(mensagem)) return;
+  await deleteVenda(idVenda, venda);
+}
+
+async function deleteVenda(idVenda, venda = {}) {
+  let estoqueOk = { ok:true };
+  if(venda.status_entrega === 'ENTREGUE') {
+    estoqueOk = await ajustarEstoqueVenda(idVenda, 'devolver');
+    if(!estoqueOk.ok) {
+      toast('Erro ao devolver estoque: '+estoqueOk.message,'error');
+      return;
+    }
+  }
+
+  const contasRes = await apiDelete(`contas_receber?id_venda=eq.${idVenda}`);
+  if(!contasRes) {
+    toast('Erro ao excluir contas a receber.','error');
+    return;
+  }
+
+  const itensRes = await apiDelete(`venda_itens?id_venda=eq.${idVenda}`);
+  if(!itensRes) {
+    toast('Erro ao excluir itens da venda.','error');
+    return;
+  }
+
+  const vendaRes = await apiDelete(`vendas?id_venda=eq.${idVenda}`);
+  if(!vendaRes) {
+    toast('Erro ao excluir a venda.','error');
+    return;
+  }
+
+  toast('Venda excluída com sucesso.','success');
+  await loadItems();
+  cancelForm();
 }
