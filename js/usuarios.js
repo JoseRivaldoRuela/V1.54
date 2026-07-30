@@ -36,7 +36,7 @@ async function saveUsuario() {
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
   try {
     if(isNew){
-      const r=await fetch(`${SUPA_URL}/rest/v1/rpc/criar_usuario?apikey=${ANON_KEY}`,{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:JSON.stringify({p_nome:nome,p_username:username,p_senha:senha,p_ativo:ativo,p_admin:admin})});
+      const r=await fetch(`${SUPA_URL}/rest/v1/rpc/app_criar_usuario?apikey=${ANON_KEY}`,{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:JSON.stringify({p_nome:nome,p_username:username,p_senha:senha,p_ativo:ativo,p_admin:admin})});
       const res=await r.json();
       if(r.ok&&res?.ok!==false){
         toast('Usuário cadastrado!','success');
@@ -49,7 +49,7 @@ async function saveUsuario() {
     } else {
       // Alterar senha se informada
       if(senha){
-        await fetch(`${SUPA_URL}/rest/v1/rpc/alterar_senha?apikey=${ANON_KEY}`,{
+        await fetch(`${SUPA_URL}/rest/v1/rpc/app_alterar_senha?apikey=${ANON_KEY}`,{
           method:'POST',
           headers:hdrs({'Content-Type':'application/json'}),
           body:JSON.stringify({p_id:currentId,p_senha:senha})

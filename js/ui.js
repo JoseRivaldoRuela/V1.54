@@ -21,7 +21,7 @@ document.addEventListener('click', e => {
 
 function setActiveMenu(tab) {
   document.querySelectorAll('.menu-btn,.dropdown-item').forEach(el=>el.classList.remove('active'));
-  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', importador_tickets:'config' };
+  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', empresas:'config', importador_tickets:'config' };
   const produtosTabs = ['tipo_mercadoria','produtos_tab','precos_especiais','estoque_movimentacoes','kardex'];
   const main = menuMap[tab];
   if(main) document.getElementById('mbtn-'+main)?.classList.add('active');
@@ -33,6 +33,7 @@ function setActiveMenu(tab) {
 // TAB SWITCH
 async function switchTab(tab) {
   if((tab==='usuarios' || tab==='importador_tickets') && !isAdmin){ toast('Acesso restrito ao administrador.','error'); return; }
+  if(tab==='empresas' && !isSuperAdminJr){ toast('Acesso exclusivo ao administrador da empresa JR.','error'); return; }
   currentTab=tab; currentId=null; isNew=false;
   const cfg=tabConfig[tab];
   document.getElementById('topbar-title').textContent=cfg.plural;
@@ -44,7 +45,10 @@ async function switchTab(tab) {
   if(tab==='contas_receber') {
     contasReceberClienteFiltro = null;
   }
-  if(tab==='vendas') {
+  if(tab==='empresas') {
+    setActiveMenu(tab);
+    await renderEmpresasAdmin();
+  } else if(tab==='vendas') {
     document.getElementById('content-body').innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
     setActiveMenu(tab);
     await loadItems();
@@ -120,6 +124,7 @@ async function loadItems() {
   if(currentTab==='contas_pagar') await anexarDadosCompraContasPagar(data);
   // Ordenar: pendentes primeiro por data_entrega asc (mais antigos primeiro), entregues depois por data_entrega desc (mais atuais primeiro)
   if(currentTab==='vendas') {
+    invalidarResumoContasVendas();
     data.sort((a,b) => {
       const aStatus = (a.status_entrega || '').toUpperCase();
       const bStatus = (b.status_entrega || '').toUpperCase();
@@ -134,7 +139,7 @@ async function loadItems() {
     });
   }
   items=data;
-  filtered=currentTab==='contas_receber' ? filtrarLateralContasReceber(items) : [...items];
+  filtered=currentTab==='contas_receber' ? filtrarLateralContasReceber(items) : (currentTab==='contas_pagar' ? ordenarLateralContasPagar(items) : [...items]);
   renderList();
   document.getElementById('sidebar-footer').textContent=`${items.length} ${cfg.plural.toLowerCase()}`;
   const badge=document.getElementById('badge-'+currentTab);
@@ -154,6 +159,11 @@ async function anexarDadosCompraContasPagar(contas) {
 
 let cacheResumoContasVendas = null;
 let cacheResumoContasVendasIds = [];
+
+function invalidarResumoContasVendas() {
+  cacheResumoContasVendas = null;
+  cacheResumoContasVendasIds = [];
+}
 
 async function carregarResumoContasVendas(ids) {
   const idsNorm = [...new Set((ids||[]).map(Number).filter(Boolean))];
@@ -331,6 +341,23 @@ function filtrarLateralContasReceber(lista, termo='') {
   return termo ? base.filter(c=>itemContemBusca(c, termo, fields)) : base;
 }
 
+function contaPagarEmAberto(c) {
+  const status = String(c?.status_pagamento || '').toUpperCase();
+  return status !== 'PAGO' && status !== 'CANCELADO' && Math.max(0, Number(c?.valor_original || 0) - Number(c?.valor_pago || 0)) > 0.005;
+}
+
+function ordenarLateralContasPagar(lista) {
+  return [...(lista || [])].sort((a,b) => {
+    const abertoA = contaPagarEmAberto(a);
+    const abertoB = contaPagarEmAberto(b);
+    if(abertoA !== abertoB) return abertoA ? -1 : 1;
+    const vencA = String(a.data_vencimento || '');
+    const vencB = String(b.data_vencimento || '');
+    if(vencA !== vencB) return vencB.localeCompare(vencA);
+    return Number(b.id_conta_pagar || 0) - Number(a.id_conta_pagar || 0);
+  });
+}
+
 function toggleLateralContasReceber() {
   contasReceberMostrarTodos = !contasReceberMostrarTodos;
   filterItems();
@@ -338,9 +365,13 @@ function toggleLateralContasReceber() {
 
 function filterItems() {
   const q=normalizarBusca(document.getElementById('search-input').value);
+  if(currentTab==='empresas') { filtrarEmpresasAdmin(q); return; }
   const fields=tabConfig[currentTab].searchFields;
   if(currentTab === 'contas_receber') filtered = filtrarLateralContasReceber(items, q);
-  else filtered=!q?[...items]:items.filter(c=>itemContemBusca(c, q, fields));
+  else {
+    const resultado = !q ? [...items] : items.filter(c=>itemContemBusca(c, q, fields));
+    filtered = currentTab === 'contas_pagar' ? ordenarLateralContasPagar(resultado) : resultado;
+  }
   renderList();
 }
 
@@ -395,7 +426,10 @@ function resumoListaFinanceira() {
     }, 0);
     return `
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
-        <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;margin-bottom:8px;">Resumo da pesquisa</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasPagarFiltroAtivo?.label || 'Resumo geral'}</div>
+          ${contasPagarFiltroAtivo ? '<button onclick="limparFiltroContasPagar()" style="background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:10px;padding:4px 8px;cursor:pointer;">↺ Mostrar todos</button>' : ''}
+        </div>
         <div style="display:grid;grid-template-columns:1fr;gap:6px;">
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Pago</span><strong style="color:var(--accent2);font-family:var(--mono);">${fmtResumoFinanceiro(pago)}</strong></div>
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A pagar</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aPagar)}</strong></div>
@@ -422,11 +456,14 @@ async function renderList() {
     if(currentTab==='contas_receber' && contasReceberClienteFiltro) {
       emptyHtml += `<div style="padding:8px 0 0;"><button type="button" onclick="limparFiltroClienteContasReceber()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);padding:8px 10px;font-size:11px;cursor:pointer;">↺ Mostrar todos</button></div>`;
     }
+    if(currentTab==='contas_pagar' && contasPagarFiltroAtivo) {
+      emptyHtml += `<div style="padding:8px 0 0;"><button type="button" onclick="limparFiltroContasPagar()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);padding:8px 10px;font-size:11px;cursor:pointer;">↺ Voltar e mostrar todos</button></div>`;
+    }
     el.innerHTML = emptyHtml;
     return;
   }
   let listaHtml = filtered.map(c=>{
-    let nome='',sub='',pills='';
+    let nome='',sub='',pills='',valorDestaque='';
     if(currentTab==='contas_receber'){
       const venc = dataPuraLocal(c.data_vencimento);
       const hoje = new Date();
@@ -436,7 +473,8 @@ async function renderList() {
       const atrasado = saldo > 0.005 && venc < hoje;
       nome = c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${c.id_cliente}`;
       const dataVenda = c.data_venda ? dataPuraBR(c.data_venda) : '-';
-      sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} (${dataVenda}) - Venc: ${dataPuraBR(c.data_vencimento)} - Saldo R$ ${saldo.toFixed(2)} - Rec. R$ ${recebido.toFixed(2)}`;
+      sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} (${dataVenda}) - Venc: ${dataPuraBR(c.data_vencimento)} - Título: ${fmtResumoFinanceiro(original)} - Recebido: ${fmtResumoFinanceiro(recebido)} - Em aberto: ${fmtResumoFinanceiro(saldo)}`;
+      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldo > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Título: ${fmtResumoFinanceiro(original)} <span style="font-weight:400;color:var(--text3);">• Aberto: ${fmtResumoFinanceiro(saldo)}</span></div>`;
       const sc = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'on' : atrasado ? 'vencido' : 'warn';
       const slabel = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'RECEBIDO' : recebido > 0.005 ? 'PARCIAL' : atrasado ? 'VENCIDO' : 'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
@@ -446,6 +484,7 @@ async function renderList() {
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
           <div style="min-width:0;flex:1;">
             <div class="item-name">${nome}</div>
+            ${valorDestaque}
             <div class="item-sub">${pills}<span>${sub}</span></div>
           </div>
           ${btnCliente}
@@ -459,7 +498,13 @@ async function renderList() {
       nome = forn?.nome_fantasia||forn?.razao_social||`Fornecedor #${c.id_fornecedor}`;
       const docCompra = c.compras?.codigo_compra || (c.id_compra ? '#'+c.id_compra : '#'+c.id_conta_pagar);
       const dataCompra = c.compras?.data_compra ? dataPuraBR(c.compras.data_compra) : '-';
-      sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)} - R$ ${Number(c.valor_original||0).toFixed(2)}`;
+      const valorTitulo = Number(c.valor_original || 0);
+      const valorPago = Math.min(valorTitulo, Math.max(0, Number(c.valor_pago || 0)));
+      const saldoPagar = Math.max(0, valorTitulo - valorPago);
+      const dataPagamento = c.data_pagamento ? dataPuraBR(c.data_pagamento) : '-';
+      const pagamentoInfo = c.status_pagamento === 'PAGO' ? ` - Pago em: ${dataPagamento}` : '';
+      sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)}${pagamentoInfo} - Título: ${fmtResumoFinanceiro(valorTitulo)} - Pago: ${fmtResumoFinanceiro(valorPago)} - Em aberto: ${fmtResumoFinanceiro(saldoPagar)}`;
+      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldoPagar > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Título: ${fmtResumoFinanceiro(valorTitulo)} <span style="font-weight:400;color:var(--text3);">• Em aberto: ${fmtResumoFinanceiro(saldoPagar)}</span></div>`;
       const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
@@ -496,6 +541,7 @@ async function renderList() {
     }
     return `<div class="item-card ${currentId===c[cfg.id]?'active':''}" onclick="openItem(${c[cfg.id]})">
       <div class="item-name">${nome}</div>
+      ${valorDestaque}
       <div class="item-sub">${pills}<span>${sub}</span></div>
     </div>`;
   }).join('');
@@ -535,6 +581,7 @@ function openItem(id) {
 }
 
 function openNew() {
+  if(currentTab==='empresas') { abrirNovaEmpresa(); return; }
   isNew=true; currentId=null;
   renderList();
   showHeader('Novo '+tabConfig[currentTab].label,'novo','');
@@ -552,7 +599,9 @@ function showHeader(t,id,sub) {
 async function cancelForm() {
   currentId=null; isNew=false; renderList();
   document.getElementById('content-header').style.display='none';
-  if(currentTab==='vendas') {
+  if(currentTab==='empresas') {
+    await renderEmpresasAdmin();
+  } else if(currentTab==='vendas') {
     await renderDashboard();
   } else if(currentTab==='contas_receber') {
     await renderDashboardContas();
@@ -589,6 +638,7 @@ function renderForm(c) {
   else if(currentTab==='precos_especiais') renderFormPreco(c);
   else if(currentTab==='estoque_movimentacoes') renderFormEstoque(c);
   else if(currentTab==='usuarios') renderFormUsuario(c);
+  else if(currentTab==='empresas') renderFormEmpresa(c);
 }
 
 
@@ -609,13 +659,22 @@ function toast(msg,type='success'){
   setTimeout(()=>el.remove(),3500);
 }
 
-function logout(){ sessionStorage.removeItem('usuario_logado'); location.href='/login.html'; }
+async function logout(){
+  try { await fetch(url('rpc/encerrar_sessao_empresa'),{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:'{}'}); } catch(e) {}
+  sessionStorage.removeItem('usuario_logado');
+  location.href='/login.html';
+}
 
 // INIT
 async function init(){
-  document.getElementById('user-info').textContent=usuario?.nome||'';
+  document.getElementById('user-info').textContent=[usuario?.empresa,usuario?.nome].filter(Boolean).join(' · ');
   // Verificar admin direto no banco - campo id na sessão
   const uid = usuario?.id || usuario?.id_usuario;
+  try {
+    const superRes = await apiPost('rpc/verificar_superadmin_jr',{});
+    isSuperAdminJr = superRes.ok && superRes.data === true;
+    if(isSuperAdminJr) document.getElementById('di-empresas-admin').style.display='flex';
+  } catch(e) { isSuperAdminJr=false; }
   if(uid) {
     try {
       const uData = await apiGet('usuarios?select=admin&id_usuario=eq.'+uid);

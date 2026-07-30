@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>JR Representações — Login</title>
+<title>JR Sistemas — Login</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
   :root {
@@ -45,7 +45,7 @@
     <div class="empresa-logo">
       <div class="empresa-icon">JR</div>
       <div class="empresa-nome">
-        <strong>JR Representações</strong>
+        <strong>JR Sistemas</strong>
         <span>Painel Comercial</span>
       </div>
     </div>
@@ -53,6 +53,11 @@
 
     <div class="title">Bem-vindo</div>
     <div class="subtitle">Faça login para continuar</div>
+
+    <div class="form-group">
+      <label class="form-label">Empresa</label>
+      <input class="form-input" id="empresa" value="jr" placeholder="Código da empresa" autocomplete="organization" oninput="agendarCargaUsuarios()"/>
+    </div>
 
     <div class="form-group">
       <label class="form-label">Usuário</label>
@@ -70,7 +75,7 @@
     <button onclick="limparSessao()" style="width:100%;background:none;border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:13px;color:var(--text2);cursor:pointer;margin-top:8px;font-family:var(--sans);">↩ Limpar / Trocar Usuário</button>
     <div class="error-msg" id="error-msg"></div>
 
-    <div class="footer">© 2026 JR Representações &nbsp;·&nbsp; <span style="color:var(--accent);font-weight:500;">v1.53</span></div>
+    <div class="footer">© 2026 JR Sistemas &nbsp;·&nbsp; <span style="color:var(--accent);font-weight:500;">v1.53</span></div>
   </div>
 </div>
 
@@ -80,43 +85,58 @@ const ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 if(sessionStorage.getItem('usuario_logado')) location.href='/index.html';
 
-async function carregarUsuarios() {
+let timerUsuarios=null;
+function agendarCargaUsuarios(){
+  clearTimeout(timerUsuarios);
+  timerUsuarios=setTimeout(carregarUsuariosEmpresa,350);
+}
+
+async function carregarUsuariosEmpresa(){
+  const empresa=document.getElementById('empresa').value.trim();
+  const sel=document.getElementById('username');
+  if(!empresa){ sel.innerHTML='<option value="">Informe a empresa primeiro</option>'; return; }
+  sel.disabled=true;
+  sel.innerHTML='<option value="">Carregando usuários...</option>';
   try {
-    const res=await fetch(`${SUPA_URL}/rest/v1/usuarios?select=id_usuario,nome,username&ativo=eq.true&order=nome.asc&apikey=${ANON_KEY}`,{headers:{'Authorization':`Bearer ${ANON_KEY}`}});
+    const res=await fetch(`${SUPA_URL}/rest/v1/rpc/listar_usuarios_login?apikey=${ANON_KEY}`,{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${ANON_KEY}`,'Content-Type':'application/json'},
+      body:JSON.stringify({p_empresa_codigo:empresa})
+    });
     const data=await res.json();
-    const sel=document.getElementById('username');
+    if(!res.ok) throw new Error(data?.message||'Erro ao carregar');
     sel.innerHTML='<option value="">Selecione um usuário...</option>';
-    if(Array.isArray(data)&&data.length>0){
-      data.forEach((u,i)=>{
-        const opt=document.createElement('option');
-        opt.value=u.username;
-        opt.textContent=u.nome;
-        if(i===0) opt.selected=true;
-        sel.appendChild(opt);
-      });
-      // Focar na senha já que usuário já está selecionado
-      document.getElementById('senha').focus();
-    }
-  } catch(e){ document.getElementById('username').innerHTML='<option value="">Erro ao carregar</option>'; }
+    (Array.isArray(data)?data:[]).forEach(u=>{
+      const opt=document.createElement('option');
+      opt.value=u.username;
+      opt.textContent=u.nome;
+      sel.appendChild(opt);
+    });
+    if(sel.options.length===2) sel.selectedIndex=1;
+    if(sel.options.length===1) sel.innerHTML='<option value="">Nenhum usuário ativo</option>';
+  } catch(e){ sel.innerHTML='<option value="">Empresa não encontrada</option>'; }
+  finally { sel.disabled=false; }
 }
 
 async function doLogin() {
+  const empresa=document.getElementById('empresa').value.trim();
   const username=document.getElementById('username').value;
   const senha=document.getElementById('senha').value;
-  if(!username){showError('Selecione um usuário.');return;}
+  if(!empresa){showError('Digite o código da empresa.');return;}
+  if(!username){showError('Digite seu usuário.');return;}
   if(!senha){showError('Digite sua senha.');return;}
   const btn=document.getElementById('btn-login');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>Entrando...';
   hideError();
   try {
-    const res=await fetch(`${SUPA_URL}/rest/v1/rpc/verificar_login?apikey=${ANON_KEY}`,{
+    const res=await fetch(`${SUPA_URL}/rest/v1/rpc/iniciar_sessao_empresa?apikey=${ANON_KEY}`,{
       method:'POST',
       headers:{'Authorization':`Bearer ${ANON_KEY}`,'Content-Type':'application/json'},
-      body:JSON.stringify({p_username:username,p_senha:senha})
+      body:JSON.stringify({p_empresa_codigo:empresa,p_username:username,p_senha:senha})
     });
     const data=await res.json();
     if(data&&data.autenticado){
-      sessionStorage.setItem('usuario_logado',JSON.stringify({id:data.id_usuario,nome:data.nome,username:data.username,admin:data.admin}));
+      sessionStorage.setItem('usuario_logado',JSON.stringify({id:data.id_usuario,nome:data.nome,username:data.username,admin:data.admin,empresa_id:data.empresa_id,empresa:data.empresa_nome,token:data.token}));
       location.href='/index.html';
     } else {
       showError('Senha incorreta. Tente novamente.');
@@ -131,7 +151,7 @@ async function doLogin() {
 function showError(msg){ const el=document.getElementById('error-msg'); el.textContent=msg; el.style.display='block'; }
 function hideError(){ document.getElementById('error-msg').style.display='none'; }
 
-carregarUsuarios();
+carregarUsuariosEmpresa().then(()=>document.getElementById('senha').focus());
 function limparSessao() {
   sessionStorage.clear();
   localStorage.clear();

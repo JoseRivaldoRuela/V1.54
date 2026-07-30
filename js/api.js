@@ -3,7 +3,11 @@ const ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 // API
 function url(p){ return `${SUPA_URL}/rest/v1/${p}${p.includes('?')?'&':'?'}apikey=${ANON_KEY}`; }
-const hdrs=(e={})=>({'Authorization':`Bearer ${ANON_KEY}`,'Accept':'application/json',...e});
+const sessaoAtual=()=>JSON.parse(sessionStorage.getItem('usuario_logado')||'null');
+const hdrs=(e={})=>{
+  const token=sessaoAtual()?.token;
+  return {'Authorization':`Bearer ${ANON_KEY}`,'Accept':'application/json',...(token?{'X-App-Session':token}:{}),...e};
+};
 async function apiGet(p){ const r=await fetch(url(p),{headers:hdrs({'Prefer':'count=exact'})}); return r.json(); }
 async function apiPost(p,b){ const r=await fetch(url(p),{method:'POST',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}); return{ok:r.ok,data:await r.json()}; }
 async function apiPatch(p,b){ const r=await fetch(url(p),{method:'PATCH',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}); return{ok:r.ok,data:await r.json()}; }

@@ -6,8 +6,9 @@ async function renderDashboard() {
   // Buscar dados
   const hoje = new Date();
   const fmtDataLocal = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const inicioHoje = hoje.toISOString().slice(0,10);
-  const inicioSemana = new Date(hoje - 7*24*60*60*1000).toISOString().slice(0,10);
+  const dataVendaLocal = venda => venda?.data_venda ? fmtDataLocal(new Date(venda.data_venda)) : '';
+  const inicioHoje = fmtDataLocal(hoje);
+  const inicioSemana = fmtDataLocal(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()-6));
   const mesRef = new Date(hoje.getFullYear(), hoje.getMonth() + dashMesOffset, 1);
   const inicioMesRef = fmtDataLocal(mesRef);
   const fimMesRef = fmtDataLocal(new Date(mesRef.getFullYear(), mesRef.getMonth()+1, 1));
@@ -26,22 +27,41 @@ async function renderDashboard() {
   const itens = Array.isArray(itensTodos) ? itensTodos : [];
 
   // Calcular totais
-  const vendasHoje = todasVendas.filter(v => v.data_venda?.slice(0,10) === inicioHoje);
-  const vendasSemana = todasVendas.filter(v => v.data_venda?.slice(0,10) >= inicioSemana);
+  const vendasHoje = todasVendas.filter(v => dataVendaLocal(v) === inicioHoje);
+  const vendasSemana = todasVendas.filter(v => dataVendaLocal(v) >= inicioSemana);
   const vendasMes = todasVendas.filter(v => {
-    const d = v.data_venda?.slice(0,10);
+    const d = dataVendaLocal(v);
     return d >= inicioMesRef && d < fimMesRef;
   });
   const vendasMesAnterior = todasVendas.filter(v => {
-    const d = v.data_venda?.slice(0,10);
+    const d = dataVendaLocal(v);
     return d >= inicioMesAnterior && d < fimMesAnterior;
   });
   const pendentes = todasVendas.filter(v => v.status_entrega !== 'ENTREGUE' && v.status_entrega !== 'CANCELADO');
 
   const soma = arr => arr.reduce((s,v) => s + Number(v.valor_final||0), 0);
-  const lucro = arr => arr.reduce((s,v) => s + (Number(v.valor_final||0) - Number(v.valor_produtos||0)), 0);
-  const variacaoMes = soma(vendasMesAnterior) > 0 ? ((soma(vendasMes)-soma(vendasMesAnterior))/soma(vendasMesAnterior)*100) : null;
+  const resumoStatus = vendas => {
+    const entregues = vendas.filter(v => v.status_entrega === 'ENTREGUE');
+    const pendentes = vendas.filter(v => v.status_entrega !== 'ENTREGUE' && v.status_entrega !== 'CANCELADO');
+    return { entregues, pendentes, ativas: [...entregues, ...pendentes] };
+  };
+  const resumoHoje = resumoStatus(vendasHoje);
+  const resumoSemana = resumoStatus(vendasSemana);
+  const resumoMes = resumoStatus(vendasMes);
+  const resumoMesAnterior = resumoStatus(vendasMesAnterior);
+  const variacaoMes = soma(resumoMesAnterior.ativas) > 0 ? ((soma(resumoMes.ativas)-soma(resumoMesAnterior.ativas))/soma(resumoMesAnterior.ativas)*100) : null;
   const fmt = n => 'R$ ' + Number(n).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const linhasStatus = resumo => `
+    <div style="display:grid;gap:5px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px;">
+        <span style="color:var(--accent);font-weight:700;">Entregues (${resumo.entregues.length})</span>
+        <span style="font-weight:700;font-family:var(--mono);">${fmt(soma(resumo.entregues))}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px;">
+        <span style="color:var(--warn);font-weight:700;">Pendentes (${resumo.pendentes.length})</span>
+        <span style="font-weight:700;font-family:var(--mono);">${fmt(soma(resumo.pendentes))}</span>
+      </div>
+    </div>`;
 
   // Top clientes
   const clienteMap = {};
@@ -67,10 +87,10 @@ async function renderDashboard() {
   const dias = parseInt(dashPeriodo);
   const labels = [], valores = [];
   for(let i=dias-1; i>=0; i--) {
-    const d = new Date(hoje - i*24*60*60*1000);
-    const ds = d.toISOString().slice(0,10);
+    const d = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()-i);
+    const ds = fmtDataLocal(d);
     labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
-    const total = todasVendas.filter(v=>v.data_venda?.slice(0,10)===ds).reduce((s,v)=>s+Number(v.valor_final||0),0);
+    const total = todasVendas.filter(v=>dataVendaLocal(v)===ds).reduce((s,v)=>s+Number(v.valor_final||0),0);
     valores.push(total);
   }
 
@@ -87,29 +107,20 @@ async function renderDashboard() {
     <div class="dash-grid">
       <div class="dash-card green" onclick="filtrarVendasDash('hoje')">
         <div class="dash-card-label">Vendas Hoje</div>
-        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(vendasHoje))}</div>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px;">
-          <span class="dash-card-sub">${vendasHoje.length} pedido${vendasHoje.length!==1?'s':''}</span>
-          <span style="font-size:11px;font-weight:700;color:${lucro(vendasHoje)>=0?'var(--accent)':'var(--danger)'};">Lucro ${fmt(lucro(vendasHoje))}</span>
-        </div>
+        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoHoje.ativas))}</div>
+        ${linhasStatus(resumoHoje)}
       </div>
       <div class="dash-card blue" onclick="filtrarVendasDash('semana')">
         <div class="dash-card-label">Últimos 7 Dias</div>
-        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(vendasSemana))}</div>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px;">
-          <span class="dash-card-sub">${vendasSemana.length} pedido${vendasSemana.length!==1?'s':''}</span>
-          <span style="font-size:11px;font-weight:700;color:${lucro(vendasSemana)>=0?'var(--accent)':'var(--danger)'};">Lucro ${fmt(lucro(vendasSemana))}</span>
-        </div>
+        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoSemana.ativas))}</div>
+        ${linhasStatus(resumoSemana)}
       </div>
       <div class="dash-card orange" onclick="filtrarVendasDash('mes')">
         <div class="dash-card-label">Mês Selecionado</div>
-        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(vendasMes))}</div>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px;">
-          <span class="dash-card-sub">${vendasMes.length} pedido${vendasMes.length!==1?'s':''}</span>
-          <span style="font-size:11px;font-weight:700;color:${lucro(vendasMes)>=0?'var(--accent)':'var(--danger)'};">Lucro ${fmt(lucro(vendasMes))}</span>
-        </div>
+        <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoMes.ativas))}</div>
+        ${linhasStatus(resumoMes)}
         <div style="margin-top:6px;font-size:10px;color:var(--text2);display:flex;justify-content:space-between;gap:8px;">
-          <span>Anterior ${fmt(soma(vendasMesAnterior))}</span>
+          <span>Anterior ${fmt(soma(resumoMesAnterior.ativas))}</span>
           <span style="color:${variacaoMes===null?'var(--text3)':variacaoMes>=0?'var(--accent)':'var(--danger)'};">${variacaoMes===null?'sem base':(variacaoMes>=0?'+':'')+variacaoMes.toFixed(1)+'%'}</span>
         </div>
       </div>
@@ -399,25 +410,27 @@ async function aplicarComparativoVendas(modo) {
 }
 
 function filtrarVendasDash(filtro) {
-  const hoje = new Date().toISOString().slice(0,10);
-  const semana = new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
   const fmtDataLocal = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const base = new Date();
+  const dataVendaLocal = venda => venda?.data_venda ? fmtDataLocal(new Date(venda.data_venda)) : '';
+  const hoje = fmtDataLocal(base);
+  const semana = fmtDataLocal(new Date(base.getFullYear(), base.getMonth(), base.getDate()-6));
   const mesRef = new Date(base.getFullYear(), base.getMonth() + dashMesOffset, 1);
   const mes = fmtDataLocal(mesRef);
   const proxMes = fmtDataLocal(new Date(mesRef.getFullYear(), mesRef.getMonth()+1, 1));
   let vendFiltradas = [...items];
   let titulo = '';
-  if(filtro==='hoje'){ vendFiltradas=items.filter(v=>v.data_venda?.slice(0,10)===hoje); titulo='Vendas de Hoje'; }
-  else if(filtro==='semana'){ vendFiltradas=items.filter(v=>v.data_venda?.slice(0,10)>=semana); titulo='Vendas — Últimos 7 Dias'; }
+  if(filtro==='hoje'){ vendFiltradas=items.filter(v=>dataVendaLocal(v)===hoje); titulo='Vendas de Hoje'; }
+  else if(filtro==='semana'){ vendFiltradas=items.filter(v=>dataVendaLocal(v)>=semana); titulo='Vendas — Últimos 7 Dias'; }
   else if(filtro==='mes'){
     vendFiltradas=items.filter(v=>{
-      const d = v.data_venda?.slice(0,10);
+      const d = dataVendaLocal(v);
       return d>=mes && d<proxMes;
     });
     titulo='Vendas — '+mesRef.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
   }
   else if(filtro==='pendente'){ vendFiltradas=items.filter(v=>v.status_entrega!=='ENTREGUE' && v.status_entrega!=='CANCELADO'); titulo='Entregas Pendentes'; }
+  vendFiltradas = vendFiltradas.filter(v => v.status_entrega !== 'CANCELADO');
   mostrarDetalheVendas(vendFiltradas, titulo);
 }
 
@@ -1481,6 +1494,7 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
   });
 
   await apiDelete(`contas_receber?id_venda=eq.${idVenda}`);
+  invalidarResumoContasVendas();
   return apiPost('contas_receber', contasData);
 }
 
@@ -1759,6 +1773,7 @@ async function cancelarEntrega(idVenda) {
   if(!contasOk) {
     toast('Entrega cancelada, mas houve erro ao excluir contas a receber.','error');
   } else {
+    invalidarResumoContasVendas();
     toast('Entrega cancelada e contas a receber removidas.','success');
   }
 
@@ -1794,6 +1809,7 @@ async function deleteVenda(idVenda, venda = {}) {
     toast('Erro ao excluir contas a receber.','error');
     return;
   }
+  invalidarResumoContasVendas();
 
   const itensRes = await apiDelete(`venda_itens?id_venda=eq.${idVenda}`);
   if(!itensRes) {

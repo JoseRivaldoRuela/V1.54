@@ -1,5 +1,6 @@
 let itensCompraAtual = [];
 let chartCompras = null;
+let chartContasPagar = null;
 
 function compraFmt(n) {
   return 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -16,20 +17,32 @@ function contaPagarAberto(c) {
   return Math.max(0, Number(c.valor_original||0) - Number(c.valor_pago||0));
 }
 
+function contasPagarMesSelecionadoRange() {
+  const hoje = new Date();
+  const mesRef = new Date(hoje.getFullYear(), hoje.getMonth() + contasPagarDashMesOffset, 1);
+  const dataLocal = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return {
+    inicio: dataLocal(mesRef),
+    fim: dataLocal(new Date(mesRef.getFullYear(), mesRef.getMonth()+1, 1)),
+    label: mesRef.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+  };
+}
+
 async function renderDashboardContasPagar() {
   const body = document.getElementById('content-body');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando contas a pagar...</div>';
 
   await loadCaches();
-  const contas = await apiGet('contas_pagar?select=*&order=data_vencimento.asc,id_conta_pagar.asc');
+  const contas = await apiGet('contas_pagar?select=*&order=data_vencimento.desc,id_conta_pagar.desc');
   if(!Array.isArray(contas)) {
     body.innerHTML = '<div class="empty-state"><div class="empty-icon">!</div><p>Erro ao carregar contas a pagar</p></div>';
     return;
   }
 
   await anexarDadosCompraContasPagar(contas);
+  contasPagarFiltroAtivo = null;
   items = contas;
-  filtered = [...items];
+  filtered = ordenarLateralContasPagar(items);
   renderList();
   const badge = document.getElementById('badge-contas_pagar');
   if(badge) badge.textContent = items.length;
@@ -41,11 +54,24 @@ async function renderDashboardContasPagar() {
   const seteDias = new Date(hoje.getTime()+7*864e5);
   const pendentes = contas.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
   const pagas = contas.filter(c=>c.status_pagamento === 'PAGO');
+  const range = contasPagarMesSelecionadoRange();
+  const pendentesMes = pendentes.filter(c=>{ const d=String(c.data_vencimento||'').slice(0,10); return d>=range.inicio && d<range.fim; });
+  const dataReferenciaPaga = c => String(contasPagarDataPagasModo === 'vencimento' ? c.data_vencimento : c.data_pagamento || '').slice(0,10);
+  const pagasMes = pagas.filter(c=>{ const d=dataReferenciaPaga(c); return d>=range.inicio && d<range.fim; });
   const vencidas = pendentes.filter(c=>contaPagarDateLocal(c.data_vencimento) < hoje);
   const pagarHoje = pendentes.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return d>=hoje && d<amanha; });
   const proximos7 = pendentes.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return d>=hoje && d<=seteDias; });
   const somaAberto = arr => arr.reduce((s,c)=>s+contaPagarAberto(c),0);
   const somaPago = arr => arr.reduce((s,c)=>s+Number(c.valor_pago||c.valor_original||0),0);
+  const dias = parseInt(contasPagarDashPeriodo || '7', 10);
+  const labels = [], valoresPagos = [], valoresPagar = [];
+  for(let i=dias-1; i>=0; i--) {
+    const d = new Date(hoje.getTime()-i*864e5);
+    const data = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
+    valoresPagar.push(somaAberto(pendentes.filter(c=>String(c.data_vencimento||'').slice(0,10)===data)));
+    valoresPagos.push(somaPago(pagas.filter(c=>String(c.data_pagamento||'').slice(0,10)===data)));
+  }
   const card = (filtro, label, valor, qtd, cor) => `
     <button class="dash-card" onclick="listarContasPagarDash('${filtro}')" style="text-align:left;cursor:pointer;">
       <div class="dash-card-label">${label}</div>
@@ -54,48 +80,101 @@ async function renderDashboardContasPagar() {
     </button>`;
 
   body.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="dash-period-btn" onclick="mudarMesContasPagarDashboard(-1)">‹ Mês anterior</button>
+      <button class="dash-period-btn ${contasPagarDashMesOffset===0?'active':''}" onclick="irMesAtualContasPagarDashboard()">Mês atual</button>
+      <button class="dash-period-btn" onclick="mudarMesContasPagarDashboard(1)" ${contasPagarDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Próximo mês ›</button>
+      <span style="width:1px;height:20px;background:var(--border);margin:0 2px;"></span>
+      <button class="dash-period-btn ${contasPagarDataPagasModo==='pagamento'?'active':''}" onclick="mudarDataPagasContasPagar('pagamento')">Por pagamento</button>
+      <button class="dash-period-btn ${contasPagarDataPagasModo==='vencimento'?'active':''}" onclick="mudarDataPagasContasPagar('vencimento')">Por vencimento</button>
+      <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${range.label}</span>
+    </div>
+
     <div class="dash-grid">
-      ${card('pendente','A Pagar',somaAberto(pendentes),pendentes.length,'var(--warn)')}
+      ${card('pagar_mes','A Pagar no Mês',somaAberto(pendentesMes),pendentesMes.length,'var(--warn)')}
       ${card('hoje','Vence Hoje',somaAberto(pagarHoje),pagarHoje.length,'var(--accent2)')}
       ${card('7dias','Proximos 7 Dias',somaAberto(proximos7),proximos7.length,'var(--accent)')}
       ${card('vencido','Vencidas',somaAberto(vencidas),vencidas.length,'var(--danger)')}
-      ${card('pago','Pago',somaPago(pagas),pagas.length,'var(--accent)')}
+      ${card('pago_mes',`Pago no Mês (${contasPagarDataPagasModo==='pagamento'?'pagamento':'vencimento'})`,somaPago(pagasMes),pagasMes.length,'var(--accent)')}
     </div>
 
     <div class="dash-chart-box" style="margin-bottom:20px;">
-      <div class="dash-chart-title"><span>Contas a Pagar</span></div>
-      <div class="dash-list">
-        ${contas.length ? contas.slice(0,12).map(c=>{
-          const compra = c.compras || {};
-          const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c.id_fornecedor));
-          const status = c.status_pagamento || 'PENDENTE';
-          const cor = status==='PAGO' ? 'var(--accent)' : (contaPagarDateLocal(c.data_vencimento)<hoje ? 'var(--danger)' : 'var(--warn)');
-          return `<div class="dash-list-item" onclick="openItem(${c.id_conta_pagar})">
-            <span class="dash-list-rank" style="color:${cor};">${status==='PAGO'?'OK':'R$'}</span>
-            <div style="flex:1;min-width:0;">
-              <div style="display:flex;justify-content:space-between;gap:8px;">
-                <span class="dash-list-name">${forn?.nome_fantasia||forn?.razao_social||'Fornecedor'}</span>
-                <span class="dash-list-value" style="color:${cor};">${compraFmt(status==='PAGO' ? (c.valor_pago||c.valor_original) : contaPagarAberto(c))}</span>
-              </div>
-              <div style="font-size:11px;color:var(--text2);">Doc: ${compra.codigo_compra || (c.id_compra ? '#'+c.id_compra : '#'+c.id_conta_pagar)} (${compra.data_compra ? dataPuraBR(compra.data_compra) : '-'}) - Venc: ${dataPuraBR(c.data_vencimento)}</div>
-            </div>
-          </div>`;
-        }).join('') : '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;">Nenhum lancamento em contas a pagar</div>'}
+      <div class="dash-chart-title">
+        <span>A pagar x Pago</span>
+        <div class="dash-chart-period">
+          <button class="dash-period-btn ${contasPagarDashPeriodo==='7'?'active':''}" onclick="mudarPeriodoContasPagar('7')">7d</button>
+          <button class="dash-period-btn ${contasPagarDashPeriodo==='15'?'active':''}" onclick="mudarPeriodoContasPagar('15')">15d</button>
+          <button class="dash-period-btn ${contasPagarDashPeriodo==='30'?'active':''}" onclick="mudarPeriodoContasPagar('30')">30d</button>
+        </div>
       </div>
+      <div class="dash-canvas-wrap sm"><canvas id="chart-contas-pagar"></canvas></div>
     </div>`;
+
+  setTimeout(() => {
+    const ctx = document.getElementById('chart-contas-pagar');
+    if(!ctx) return;
+    if(chartContasPagar) chartContasPagar.destroy();
+    chartContasPagar = new Chart(ctx, {
+      type:'line',
+      data:{ labels, datasets:[
+        {label:'A pagar',data:valoresPagar,borderColor:'#ffa500',backgroundColor:'rgba(255,165,0,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35},
+        {label:'Pago',data:valoresPagos,borderColor:'#00e5a0',backgroundColor:'rgba(0,229,160,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#8888a0',font:{size:11},padding:12}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${compraFmt(ctx.raw)}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11},callback:v=>'R$ '+Number(v).toLocaleString('pt-BR')}}}}
+    });
+  }, 100);
+}
+
+function mudarPeriodoContasPagar(periodo) {
+  contasPagarDashPeriodo = periodo;
+  renderDashboardContasPagar();
+}
+
+async function mudarMesContasPagarDashboard(delta) {
+  contasPagarDashMesOffset += delta;
+  if(contasPagarDashMesOffset > 0) contasPagarDashMesOffset = 0;
+  await renderDashboardContasPagar();
+}
+
+async function irMesAtualContasPagarDashboard() {
+  contasPagarDashMesOffset = 0;
+  await renderDashboardContasPagar();
+}
+
+async function mudarDataPagasContasPagar(modo) {
+  contasPagarDataPagasModo = modo === 'vencimento' ? 'vencimento' : 'pagamento';
+  await renderDashboardContasPagar();
 }
 
 function listarContasPagarDash(filtro) {
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const amanha = new Date(hoje.getTime()+864e5);
   const seteDias = new Date(hoje.getTime()+7*864e5);
+  const range = contasPagarMesSelecionadoRange();
   let lista = [...items];
   if(filtro==='pendente') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
   else if(filtro==='pago') lista = lista.filter(c=>c.status_pagamento === 'PAGO');
+  else if(filtro==='pagar_mes') lista = lista.filter(c=>{ const d=String(c.data_vencimento||'').slice(0,10); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=range.inicio && d<range.fim; });
+  else if(filtro==='pago_mes') lista = lista.filter(c=>{ const d=String(contasPagarDataPagasModo === 'vencimento' ? c.data_vencimento : c.data_pagamento || '').slice(0,10); return c.status_pagamento === 'PAGO' && d>=range.inicio && d<range.fim; });
   else if(filtro==='vencido') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && contaPagarDateLocal(c.data_vencimento) < hoje);
   else if(filtro==='hoje') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<amanha; });
   else if(filtro==='7dias') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<=seteDias; });
-  filtered = lista;
+  const labels = {
+    pagar_mes:`A pagar em ${range.label}`,
+    pago_mes:`Pagas em ${range.label} por ${contasPagarDataPagasModo}`,
+    pendente:'Todas em aberto', pago:'Todas pagas', vencido:'Vencidas', hoje:'Vencem hoje', '7dias':'Próximos 7 dias'
+  };
+  contasPagarFiltroAtivo = { filtro, label:labels[filtro] || 'Pesquisa' };
+  filtered = ordenarLateralContasPagar(lista);
+  renderList();
+}
+
+function limparFiltroContasPagar() {
+  contasPagarFiltroAtivo = null;
+  const busca = normalizarBusca(document.getElementById('search-input')?.value || '');
+  const fields = tabConfig.contas_pagar.searchFields;
+  const lista = busca ? items.filter(c=>itemContemBusca(c, busca, fields)) : items;
+  filtered = ordenarLateralContasPagar(lista);
   renderList();
 }
 

@@ -252,7 +252,7 @@
 <div class="app">
   <div class="topbar">
     <button class="hamburger" onclick="toggleSidebar()">☰</button>
-    <span class="topbar-logo">⚡ JR Representações</span>
+    <span class="topbar-logo">⚡ JR Sistemas</span>
     <div class="topbar-sep"></div>
     <span class="topbar-title" id="topbar-title">Painel Comercial</span>
     <div class="topbar-right">
@@ -352,6 +352,9 @@
           <span><span class="item-icon">👤</span> Manutenção de Usuários</span>
           <span class="dropdown-badge" id="badge-usuarios2">0</span>
         </div>
+        <div class="dropdown-item" id="di-empresas-admin" onclick="switchTab('empresas');closeMenus()" style="display:none;">
+          <span><span class="item-icon">E</span> Empresas e primeiro usuário</span>
+        </div>
         <div class="dropdown-item" id="di-importador_tickets" onclick="switchTab('importador_tickets');closeMenus()">
           <span><span class="item-icon">PDF</span> Importar Tickets</span>
         </div>
@@ -426,6 +429,7 @@
 <script src="js/financeiro.js"></script>
 <script src="js/cadastros.js"></script>
 <script src="js/usuarios.js"></script>
+<script src="js/empresas.js"></script>
 <script src="js/importador_tickets.js"></script>
 <script src="js/ui.js"></script>
 </body>

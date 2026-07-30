@@ -1,4 +1,4 @@
-﻿let importadorTicketsState = {
+let importadorTicketsState = {
   tickets: [],
   logs: [],
   importando: false
@@ -241,12 +241,12 @@ function parseTicketTexto(texto, arquivo) {
   const dataLine = linhas.find(l => /\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2}/.test(l));
   const clienteIdx = linhas.findIndex(l => /^CLIENTE$/i.test(removerAcentos(l)));
   const cliente = clienteIdx >= 0 ? linhas[clienteIdx + 1] : '';
-  const offlineMatch = /(?:Codigo|CÃ³digo)\s+venda\s+offline\s+([A-Za-z0-9]+)/i.exec(bruto);
+  const offlineMatch = /(?:Codigo|Código)\s+venda\s+offline\s+([A-Za-z0-9]+)/i.exec(bruto);
   const offline = offlineMatch ? offlineMatch[1] : nomeArquivoRef(arquivo);
   const totalMatch = /TOTAL:\s*R\$\s*([\d.,]+)/i.exec(bruto);
   const descontoMatch = /DESCONTO:\s*(?:[\d.,]+\s*%\s*)?R\$\s*([\d.,]+)/i.exec(bruto);
   const abertoMatch = /Parcelas\s+em\s+aberto:\s*R\$\s*([\d.,]+)/i.exec(bruto);
-  const obsMatch = /Observa(?:coes|Ã§Ãµes):\s*(.*)/i.exec(bruto);
+  const obsMatch = /Observa(?:coes|ções):\s*(.*)/i.exec(bruto);
 
   const itens = [];
   let emItens = false;

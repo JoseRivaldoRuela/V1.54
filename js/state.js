@@ -1,7 +1,11 @@
 // Sessão
 const usuario = JSON.parse(sessionStorage.getItem('usuario_logado')||'null');
-if (!usuario) location.href='/login.html';
+if (!usuario?.token) {
+  sessionStorage.removeItem('usuario_logado');
+  location.href='/login.html';
+}
 const isAdmin = usuario?.admin === true || usuario?.admin === 'true' || usuario?.admin === 1;
+let isSuperAdminJr = false;
 
 // Estado
 let currentTab='clientes', items=[], filtered=[], currentId=null, isNew=false;
@@ -24,6 +28,8 @@ const tabConfig = {
   usuarios:         { table:'usuarios',                   id:'id_usuario',        label:'Usuário',            plural:'Usuários',             order:'nome',         searchFields:['nome','username'], hasCNPJ:false, hasAtivo:true }
 };
 
+tabConfig.empresas = { table:'empresas', id:'id_empresa', label:'Empresa', plural:'Empresas', order:'nome', searchFields:['nome','codigo'], hasCNPJ:false, hasAtivo:true };
+
 tabConfig.importador_tickets = { table:'vendas', id:'id_venda', label:'Importar Tickets', plural:'Importador de Tickets', order:'id_venda', searchFields:['codigo_venda'], hasCNPJ:false, hasAtivo:false };
 
 let dashPeriodo = '7'; // dias
@@ -33,6 +39,10 @@ let dashComparativoAno = new Date().getFullYear();
 let dashComparativoModo = 'ultimos'; // ultimos | ano
 let contasDashPeriodo = '7'; // dias
 let contasDashMesOffset = 0; // 0 = mes atual, -1 = mes anterior
+let contasPagarDashPeriodo = '7'; // dias
+let contasPagarDashMesOffset = 0; // 0 = mes atual, -1 = mes anterior
+let contasPagarFiltroAtivo = null; // filtro aplicado pelos cards do dashboard
+let contasPagarDataPagasModo = 'pagamento'; // pagamento | vencimento
 let contasReceberMostrarTodos = false; // lista lateral: abertos por padrao
 let contasReceberClienteFiltro = null; // lista lateral: visão por cliente
 let contasComparativoMeses = 12;

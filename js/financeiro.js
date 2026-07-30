@@ -30,7 +30,7 @@ function contasFmtDataBR(value) {
 
 async function renderFormConta(c) {
   await loadCacheCobrancas();
-  // Buscar cÃ³digo da venda separadamente
+  // Buscar código da venda separadamente
   let codigoVenda = c?.codigo_venda || '';
   if(c?.id_venda) {
     const vRef = await apiGet('vendas?select=codigo_venda&id_venda=eq.'+c.id_venda);
@@ -52,14 +52,17 @@ async function renderFormConta(c) {
   const baixaDataPadrao = `${agora.getFullYear()}-${String(agora.getMonth()+1).padStart(2,'0')}-${String(agora.getDate()).padStart(2,'0')}T${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
 
   document.getElementById('content-body').innerHTML = `
-    <div class="section-label"><span>Dados da Conta</span></div>
+    <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+      <span>Dados da Conta</span>
+      ${c?.status_recebimento === 'RECEBIDO' ? `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:11px;" onclick="reativarRecebimento()">↺ Reativar recebimento</button>` : ''}
+    </div>
     <div class="form-grid">
       <div class="form-group full">
         <label class="form-label">Cliente</label>
         <input class="form-input" value="${c?.clientes?.nome_fantasia||c?.clientes?.razao_social||''}" readonly style="color:var(--text2);"/>
       </div>
       <div class="form-group">
-        <label class="form-label">Venda ReferÃªncia</label>
+        <label class="form-label">Venda Referência</label>
         <input class="form-input" value="${codigoVenda||(c?.id_venda?`Venda #${c.id_venda}`:'')}" readonly style="color:var(--text2);"/>
       </div>
       <div class="form-group">
@@ -104,7 +107,7 @@ async function renderFormConta(c) {
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Data de Vencimento ${atrasado?'<span style="color:var(--danger)">âš ï¸ VENCIDA</span>':''}</label>
+        <label class="form-label">Data de Vencimento ${atrasado?'<span style="color:var(--danger)">⚠️ VENCIDA</span>':''}</label>
         <input class="form-input" type="date" id="f-data_vencimento" value="${v('data_vencimento')}" style="${atrasado?'border-color:var(--danger);':''}"/>
       </div>
       <div class="form-group">
@@ -113,9 +116,9 @@ async function renderFormConta(c) {
       </div>
     </div>
 
-    <div class="section-label"><span>ObservaÃ§Ãµes</span></div>
+    <div class="section-label"><span>Observações</span></div>
     <div class="form-group">
-      <textarea class="form-textarea" id="f-observacoes" placeholder="ObservaÃ§Ãµes...">${v('observacoes')}</textarea>
+      <textarea class="form-textarea" id="f-observacoes" placeholder="Observações...">${v('observacoes')}</textarea>
     </div>
 
     ${c && saldoAberto > 0.005 ? `
@@ -126,9 +129,9 @@ async function renderFormConta(c) {
       <div class="form-group full"><label class="form-label">Observacao da baixa</label><input class="form-input" id="f-baixa_obs" placeholder="Ex: pagamento parcial, comprovante..."/></div>
     </div>` : ''}
     <div class="form-actions">
-      <button class="btn btn-primary" id="btn-save" onclick="saveConta()">âœ“ Salvar</button>
+      <button class="btn btn-primary" id="btn-save" onclick="saveConta()">✓ Salvar</button>
       ${c && saldoAberto > 0.005 ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="baixarContaParcial()">Baixar Valor</button>` : ''}
-      ${c?.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">ðŸ’° Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">ðŸ’° Recebido</span>'}
+      ${c?.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">💰 Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">💰 Recebido</span>'}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
     </div>`;
 }
@@ -153,8 +156,8 @@ async function saveConta() {
     observacoes: document.getElementById('f-observacoes').value.trim()||null
   };
   const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
-  if(ok){ toast('Conta atualizada!','success'); await loadItems(); openItem(currentId); }
-  else{ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='âœ“ Salvar'; }
+  if(ok){ invalidarResumoContasVendas(); toast('Conta atualizada!','success'); await loadItems(); openItem(currentId); }
+  else{ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='✓ Salvar'; }
 }
 
 async function marcarRecebido() {
@@ -167,8 +170,28 @@ async function marcarRecebido() {
     meio_pagamento: document.getElementById('f-meio_pagamento').value||null
   };
   const{ok}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
-  if(ok){ toast('Pagamento confirmado!','success'); await loadItems(); openItem(currentId); }
+  if(ok){ invalidarResumoContasVendas(); toast('Pagamento confirmado!','success'); await loadItems(); openItem(currentId); }
   else toast('Erro ao confirmar','error');
+}
+
+async function reativarRecebimento() {
+  const conta = items.find(c => Number(c.id_conta) === Number(currentId));
+  if(!conta) return toast('Conta não encontrada.','error');
+  if(!confirm('Reativar esta conta? O valor recebido e a data de recebimento serão removidos, e ela voltará para pendente.')) return;
+
+  const {ok,data:res} = await apiPatch(`contas_receber?id_conta=eq.${currentId}`, {
+    status_recebimento: 'PENDENTE',
+    valor_recebido: 0,
+    data_recebimento: null
+  });
+  if(ok) {
+    invalidarResumoContasVendas();
+    toast('Conta reativada e marcada como pendente.','success');
+    await loadItems();
+    openItem(currentId);
+  } else {
+    toast('Erro ao reativar: '+(res?.message||'erro'),'error');
+  }
 }
 
 async function registrarBaixaContaReceber(payload) {
@@ -203,6 +226,7 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     observacoes
   });
   if(!res.ok) return { ok:false, message:res.data?.message || `Erro ao baixar conta ${conta.id_conta}` };
+  invalidarResumoContasVendas();
 
   await registrarBaixaContaReceber({
     id_conta: conta.id_conta,
@@ -326,11 +350,11 @@ async function aplicarBaixaClienteContas() {
 // =====================
 async function renderDashboardContas() {
   const body = document.getElementById('content-body');
-  body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando anÃ¡lises...</div>';
+  body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando análises...</div>';
 
   const contas = await apiGet('contas_receber?select=*,clientes!fk_conta_cliente(nome_fantasia,razao_social)&order=data_vencimento.asc');
   await anexarCodigoVendaContas(contas);
-  if(!Array.isArray(contas)) { body.innerHTML='<div class="empty-state"><div class="empty-icon">âš ï¸</div><p>Erro ao carregar dados</p></div>'; return; }
+  if(!Array.isArray(contas)) { body.innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div><p>Erro ao carregar dados</p></div>'; return; }
 
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const amanha = new Date(hoje.getTime()+864e5);
@@ -388,15 +412,15 @@ async function renderDashboardContas() {
       </div>
     </div>
 
-    <!-- GrÃ¡fico + Vencimentos -->
+    <!-- Gráfico + Vencimentos -->
     <div class="dash-charts" style="margin-bottom:16px;">
       <div class="dash-chart-box">
-        <div class="dash-chart-title"><span>ðŸ“Š DistribuiÃ§Ã£o por Status</span></div>
+        <div class="dash-chart-title"><span>📊 Distribuição por Status</span></div>
         <div class="dash-canvas-wrap sm"><canvas id="chart-contas"></canvas></div>
       </div>
 
       <div class="dash-chart-box">
-        <div class="dash-chart-title"><span>ðŸ“… Vencimentos em Aberto</span></div>
+        <div class="dash-chart-title"><span>📅 Vencimentos em Aberto</span></div>
         <div class="dash-list">
           <div class="dash-list-item" onclick="listarContas('vencido','Vencidas')">
             <span class="dash-list-rank" style="color:var(--danger);">!</span>
@@ -412,7 +436,7 @@ async function renderDashboardContas() {
             <span class="dash-list-rank" style="color:var(--warn);">7d</span>
             <div style="flex:1;">
               <div style="display:flex;justify-content:space-between;">
-                <span class="dash-list-name">PrÃ³ximos 7 dias</span>
+                <span class="dash-list-name">Próximos 7 dias</span>
                 <span class="dash-list-value">${fmt(soma(d7))}</span>
               </div>
               <div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${totalGeral>0?(soma(d7)/totalGeral*100).toFixed(0):0}%;background:var(--warn)"></div></div>
@@ -454,7 +478,7 @@ async function renderDashboardContas() {
 
     <!-- Top clientes inadimplentes -->
     <div class="dash-chart-box">
-      <div class="dash-chart-title"><span>ðŸ‘¥ Maiores Valores em Aberto por Cliente</span></div>
+      <div class="dash-chart-title"><span>👥 Maiores Valores em Aberto por Cliente</span></div>
       <div class="dash-two-col" id="dash-inadim">
         ${(() => {
           const clienteMap = {};
@@ -482,7 +506,7 @@ async function renderDashboardContas() {
       </div>
     </div>`;
 
-  // GrÃ¡fico de pizza
+  // Gráfico de pizza
   setTimeout(() => {
     const ctx = document.getElementById('chart-contas');
     if(!ctx) return;
@@ -532,9 +556,9 @@ function listarContas(filtro, titulo) {
 
   document.getElementById('content-body').innerHTML = `
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">â† Voltar</button>
+      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">← Voltar</button>
       <span style="font-size:15px;font-weight:600;">${titulo}</span>
-      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} Â· ${fmt(total)}</span>
+      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} · ${fmt(total)}</span>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
@@ -686,9 +710,9 @@ async function renderDashboardContas() {
 
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <button class="dash-period-btn" onclick="mudarMesContasDashboard(-1)">â€¹ MÃªs anterior</button>
-      <button class="dash-period-btn ${contasDashMesOffset===0?'active':''}" onclick="irMesAtualContasDashboard()">MÃªs atual</button>
-      <button class="dash-period-btn" onclick="mudarMesContasDashboard(1)" ${contasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>PrÃ³ximo mÃªs â€º</button>
+      <button class="dash-period-btn" onclick="mudarMesContasDashboard(-1)">‹ Mês anterior</button>
+      <button class="dash-period-btn ${contasDashMesOffset===0?'active':''}" onclick="irMesAtualContasDashboard()">Mês atual</button>
+      <button class="dash-period-btn" onclick="mudarMesContasDashboard(1)" ${contasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Próximo mês ›</button>
       <button class="dash-period-btn" onclick="renderComparativoContas()">Comparar meses</button>
       <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${range.label}</span>
     </div>
@@ -706,13 +730,13 @@ async function renderDashboardContas() {
           <div style="font-size:16px;font-weight:700;color:var(--accent2);line-height:1.2;margin-top:3px;">${contasFmtMoeda(contasSoma(recebidasSemana,true))}</div>
           <div style="font-size:10px;color:var(--text3);margin-top:2px;">${recebidasSemana.length} conta${recebidasSemana.length!==1?'s':''}</div>
         </button>
-        <button onclick="listarContas('recebido_mes','Recebido no MÃªs')" style="${cardStyle}">
-          <div style="font-size:10px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;">Recebido mÃªs</div>
+        <button onclick="listarContas('recebido_mes','Recebido no Mês')" style="${cardStyle}">
+          <div style="font-size:10px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;">Recebido mês</div>
           <div style="font-size:16px;font-weight:700;color:var(--accent);line-height:1.2;margin-top:3px;">${contasFmtMoeda(contasSoma(recebidasMes,true))}</div>
           <div style="font-size:10px;color:${variacaoColor(variacaoRecebido)};margin-top:2px;">${variacaoText(variacaoRecebido)}</div>
         </button>
-        <button onclick="listarContas('receber_mes','A Receber no MÃªs')" style="${cardStyle}">
-          <div style="font-size:10px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;">A receber mÃªs</div>
+        <button onclick="listarContas('receber_mes','A Receber no Mês')" style="${cardStyle}">
+          <div style="font-size:10px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;">A receber mês</div>
           <div style="font-size:16px;font-weight:700;color:var(--warn);line-height:1.2;margin-top:3px;">${contasFmtMoeda(contasSoma(receberMes))}</div>
           <div style="font-size:10px;color:${variacaoColor(variacaoReceber,false)};margin-top:2px;">${variacaoText(variacaoReceber)}</div>
         </button>
@@ -747,7 +771,7 @@ async function renderDashboardContas() {
         <div class="dash-list">
           ${[
             ['vencido','Vencidas',vencidas,'var(--danger)','!'],
-            ['7dias','PrÃ³ximos 7 dias',proximos7,'var(--warn)','7d'],
+            ['7dias','Próximos 7 dias',proximos7,'var(--warn)','7d'],
             ['15dias','8 a 15 dias',d15,'var(--accent2)','15d'],
             ['30dias','16 a 30 dias',d30,'var(--accent)','30d'],
             ['mais30','Mais de 30 dias',mais30,'var(--text3)','+30']
@@ -862,23 +886,22 @@ function listarContas(filtro, titulo) {
 
   document.getElementById('content-body').innerHTML = `
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">â† Voltar</button>
+      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">← Voltar</button>
       <span style="font-size:15px;font-weight:600;">${titulo}</span>
-      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} Â· ${contasFmtMoeda(total)}</span>
+      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} · ${contasFmtMoeda(total)}</span>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:760px;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:650px;">
         <thead><tr style="background:var(--surface2);">
           <th style="padding:10px 14px;text-align:left;font-size:11px;color:var(--text2);font-weight:500;">Cliente</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pedido</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Vencimento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Recebimento</th>
-          <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pagamento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Status</th>
           <th style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Valor</th>
         </tr></thead>
         <tbody>
-          ${lista.length===0?'<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
+          ${lista.length===0?'<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
           lista.map(c=>{
             const venc=contasDateLocal(c.data_vencimento);
             const receb=new Date(c.data_recebimento || '');
@@ -966,15 +989,15 @@ async function renderComparativoContas() {
 
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:6px 12px;cursor:pointer;">â† Voltar</button>
+      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:6px 12px;cursor:pointer;">← Voltar</button>
       <span style="font-size:15px;font-weight:600;">Comparativo do Contas a Receber</span>
-      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${contasComparativoModo==='ano' ? 'Ano '+contasComparativoAno : 'Ãšltimos '+mesesQtd+' meses'}</span>
+      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${contasComparativoModo==='ano' ? 'Ano '+contasComparativoAno : 'Últimos '+mesesQtd+' meses'}</span>
     </div>
 
     <div class="dash-chart-box" style="margin-bottom:14px;padding:12px;">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;align-items:end;">
         <div class="form-group">
-          <label class="form-label">Ãšltimos meses</label>
+          <label class="form-label">Últimos meses</label>
           <input class="form-input" type="number" min="1" max="60" step="1" id="contas-comp-meses" value="${mesesQtd}"/>
         </div>
         <div class="form-group">
@@ -983,7 +1006,7 @@ async function renderComparativoContas() {
             ${anos.map(a=>`<option value="${a}" ${Number(a)===Number(contasComparativoAno)?'selected':''}>${a}</option>`).join('')}
           </select>
         </div>
-        <button class="btn btn-primary" onclick="aplicarComparativoContas('ultimos')">Ver Ãºltimos meses</button>
+        <button class="btn btn-primary" onclick="aplicarComparativoContas('ultimos')">Ver últimos meses</button>
         <button class="btn btn-secondary" onclick="aplicarComparativoContas('ano')">Ver ano todo</button>
       </div>
     </div>
@@ -991,24 +1014,24 @@ async function renderComparativoContas() {
     <div class="dash-grid" style="grid-template-columns:repeat(auto-fit,minmax(145px,1fr));margin-bottom:14px;">
       <div class="dash-card green" style="cursor:default;"><div class="dash-card-label">Recebido</div><div class="dash-card-value" style="font-size:20px;">${contasFmtMoeda(totalRecebido)}</div><div class="dash-card-sub">${qtdRecebidas} conta${qtdRecebidas!==1?'s':''}</div></div>
       <div class="dash-card orange" style="cursor:default;"><div class="dash-card-label">Em aberto</div><div class="dash-card-value" style="font-size:20px;color:var(--warn);">${contasFmtMoeda(totalAberto)}</div><div class="dash-card-sub">${qtdAbertas} conta${qtdAbertas!==1?'s':''}</div></div>
-      <div class="dash-card blue" style="cursor:default;"><div class="dash-card-label">Total do perÃ­odo</div><div class="dash-card-value" style="font-size:20px;">${contasFmtMoeda(totalRecebido+totalAberto)}</div><div class="dash-card-sub">recebido + aberto</div></div>
-      <div class="dash-card green" style="cursor:default;"><div class="dash-card-label">Melhor mÃªs</div><div class="dash-card-value" style="font-size:17px;">${melhorMes?.labelLongo||'-'}</div><div class="dash-card-sub">${contasFmtMoeda(melhorMes?.recebido||0)}</div></div>
+      <div class="dash-card blue" style="cursor:default;"><div class="dash-card-label">Total do período</div><div class="dash-card-value" style="font-size:20px;">${contasFmtMoeda(totalRecebido+totalAberto)}</div><div class="dash-card-sub">recebido + aberto</div></div>
+      <div class="dash-card green" style="cursor:default;"><div class="dash-card-label">Melhor mês</div><div class="dash-card-value" style="font-size:17px;">${melhorMes?.labelLongo||'-'}</div><div class="dash-card-sub">${contasFmtMoeda(melhorMes?.recebido||0)}</div></div>
     </div>
 
     <div class="dash-chart-box" style="margin-bottom:14px;">
-      <div class="dash-chart-title"><span>Recebido e Aberto por MÃªs</span></div>
+      <div class="dash-chart-title"><span>Recebido e Aberto por Mês</span></div>
       <div class="dash-canvas-wrap"><canvas id="chart-comparativo-contas"></canvas></div>
     </div>
 
     <div class="dash-chart-box" style="margin-bottom:20px;overflow:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:620px;">
         <thead><tr style="background:var(--surface2);">
-          <th style="padding:9px 10px;text-align:left;font-size:11px;color:var(--text2);font-weight:500;">MÃªs</th>
+          <th style="padding:9px 10px;text-align:left;font-size:11px;color:var(--text2);font-weight:500;">Mês</th>
           <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Recebidas</th>
           <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Recebido</th>
           <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Abertas</th>
           <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Em aberto</th>
-          <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">VariaÃ§Ã£o</th>
+          <th style="padding:9px 10px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Variação</th>
         </tr></thead>
         <tbody>
           ${dados.map(m=>`<tr style="border-top:1px solid var(--border);">
@@ -1120,9 +1143,9 @@ async function renderDashboardContas() {
   const totalBase = Math.max(1, contasSoma(pendentes) + contasSoma(recebidasMes,true));
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <button class="dash-period-btn" onclick="mudarMesContasDashboard(-1)">â€¹ Mes anterior</button>
+      <button class="dash-period-btn" onclick="mudarMesContasDashboard(-1)">‹ Mes anterior</button>
       <button class="dash-period-btn ${contasDashMesOffset===0?'active':''}" onclick="irMesAtualContasDashboard()">Mes atual</button>
-      <button class="dash-period-btn" onclick="mudarMesContasDashboard(1)" ${contasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Proximo mes â€º</button>
+      <button class="dash-period-btn" onclick="mudarMesContasDashboard(1)" ${contasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Proximo mes ›</button>
       <button class="dash-period-btn" onclick="renderComparativoContas()">Comparar meses</button>
       <button class="dash-period-btn" onclick="renderBaixaClienteContas()">Baixar cliente</button>
       <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${range.label}</span>
@@ -1235,23 +1258,22 @@ function listarContas(filtro, titulo) {
   const total = lista.reduce((s,c)=>s+(filtro && String(filtro).startsWith('recebido') ? contasValorRecebido(c) : contasValorAberto(c)),0);
   document.getElementById('content-body').innerHTML = `
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">â† Voltar</button>
+      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">← Voltar</button>
       <span style="font-size:15px;font-weight:600;">${titulo}</span>
-      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} Â· ${contasFmtMoeda(total)}</span>
+      <span style="font-size:12px;color:var(--text2);margin-left:auto;">${lista.length} conta${lista.length!==1?'s':''} · ${contasFmtMoeda(total)}</span>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:760px;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:650px;">
         <thead><tr style="background:var(--surface2);">
           <th style="padding:10px 14px;text-align:left;font-size:11px;color:var(--text2);font-weight:500;">Cliente</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pedido / Venda</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Vencimento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Recebimento</th>
-          <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Pagamento</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Status</th>
           <th style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Valor</th>
         </tr></thead>
         <tbody>
-          ${lista.length===0?'<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
+          ${lista.length===0?'<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma conta encontrada</td></tr>':
           lista.map(c=>{
             const venc=contasDateLocal(c.data_vencimento);
             const receb=new Date(c.data_recebimento || '');
@@ -1264,18 +1286,15 @@ function listarContas(filtro, titulo) {
               <td style="padding:10px 14px;text-align:center;color:var(--accent);font-family:var(--mono);font-weight:600;">${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')}<div style="font-size:10px;color:var(--text3);font-weight:400;margin-top:2px;">${contasFmtDataBR(c.data_venda)}</div></td>
               <td style="padding:10px 14px;text-align:center;color:${atras?'var(--danger)':'var(--text2)'};">${venc.toLocaleDateString('pt-BR')}</td>
               <td style="padding:10px 14px;text-align:center;color:${c.status_recebimento==='RECEBIDO'?'var(--accent)':'var(--text3)'};">${c.data_recebimento?receb.toLocaleDateString('pt-BR'):'-'}</td>
-              <td style="padding:10px 14px;text-align:center;color:var(--text2);">${c.meio_pagamento||'-'}</td>
               <td style="padding:10px 14px;text-align:center;"><span class="pill ${sc}">${sl}</span></td>
               <td style="padding:10px 14px;text-align:right;font-weight:600;color:var(--accent);font-family:var(--mono);">${contasFmtMoeda(valorLinha)}</td>
             </tr>`;
           }).join('')}
         </tbody>
         <tfoot><tr style="border-top:2px solid var(--border);background:var(--surface2);">
-          <td colspan="6" style="padding:10px 14px;font-weight:600;">Total</td>
+          <td colspan="5" style="padding:10px 14px;font-weight:600;">Total</td>
           <td style="padding:10px 14px;text-align:right;font-weight:700;color:var(--accent);font-family:var(--mono);">${contasFmtMoeda(total)}</td>
         </tr></tfoot>
       </table>
     </div>`;
 }
-
-
