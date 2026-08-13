@@ -1,10 +1,11 @@
 const SUPA_URL=process.env.SUPABASE_URL||'https://jlfltollgwtrqpapqnnp.supabase.co';
-const ANON_KEY=process.env.SUPABASE_ANON_KEY;
+// A chave anon e publica e ja faz parte da configuracao do aplicativo.
+const ANON_KEY=process.env.SUPABASE_ANON_KEY||'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpsZmx0b2xsZ3d0cnFwYXBxbm5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MDcwNDQsImV4cCI6MjA5NDI4MzA0NH0.A9uEdtRQrI0zjFn6W9euH7B3cmMVuRyuTud7_oFSF7g';
 const SERVICE_KEY=process.env.SUPABASE_SERVICE_ROLE_KEY;
 module.exports=async function handler(req,res){
   res.setHeader('Content-Type','application/json');
   if(req.method!=='POST')return res.status(405).json({error:'Metodo nao permitido'});
-  if(!ANON_KEY||!SERVICE_KEY||!process.env.RESEND_API_KEY)return res.status(503).json({error:'Envio de e-mail nao configurado'});
+  if(!SERVICE_KEY||!process.env.RESEND_API_KEY)return res.status(503).json({error:'Envio de e-mail nao configurado'});
   const token=req.headers['x-app-session']; const body=typeof req.body==='string'?JSON.parse(req.body||'{}'):(req.body||{}); const id=Number(body.id_chamado||0);
   if(!token||!id)return res.status(400).json({error:'Dados invalidos'});
   try{
