@@ -470,11 +470,13 @@ async function renderList() {
       const original = Number(c.valor_original || 0);
       const recebido = Math.min(original, Math.max(0, Number(c.valor_recebido || 0)));
       const saldo = Math.max(0, original - recebido);
+      const parcelaInfo=rotuloParcela(c);
+      const totalGeralTitulo=valorTotalParcelas(c,'receber');
       const atrasado = saldo > 0.005 && venc < hoje;
       nome = c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${c.id_cliente}`;
       const dataVenda = c.data_venda ? dataPuraBR(c.data_venda) : '-';
       sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} (${dataVenda}) - Venc: ${dataPuraBR(c.data_vencimento)} - Título: ${fmtResumoFinanceiro(original)} - Recebido: ${fmtResumoFinanceiro(recebido)} - Em aberto: ${fmtResumoFinanceiro(saldo)}`;
-      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldo > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Título: ${fmtResumoFinanceiro(original)} <span style="font-weight:400;color:var(--text3);">• Aberto: ${fmtResumoFinanceiro(saldo)}</span></div>`;
+      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldo > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Parcela ${parcelaInfo}: ${fmtResumoFinanceiro(original)} <span style="font-weight:400;color:var(--text3);">• Total: ${fmtResumoFinanceiro(totalGeralTitulo)} • Aberto: ${fmtResumoFinanceiro(saldo)}</span></div>`;
       const sc = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'on' : atrasado ? 'vencido' : 'warn';
       const slabel = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'RECEBIDO' : recebido > 0.005 ? 'PARCIAL' : atrasado ? 'VENCIDO' : 'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
@@ -501,10 +503,12 @@ async function renderList() {
       const valorTitulo = Number(c.valor_original || 0);
       const valorPago = Math.min(valorTitulo, Math.max(0, Number(c.valor_pago || 0)));
       const saldoPagar = Math.max(0, valorTitulo - valorPago);
+      const parcelaInfo=rotuloParcela(c);
+      const totalGeralTitulo=valorTotalParcelas(c,'pagar');
       const dataPagamento = c.data_pagamento ? dataPuraBR(c.data_pagamento) : '-';
       const pagamentoInfo = c.status_pagamento === 'PAGO' ? ` - Pago em: ${dataPagamento}` : '';
       sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)}${pagamentoInfo} - Título: ${fmtResumoFinanceiro(valorTitulo)} - Pago: ${fmtResumoFinanceiro(valorPago)} - Em aberto: ${fmtResumoFinanceiro(saldoPagar)}`;
-      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldoPagar > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Título: ${fmtResumoFinanceiro(valorTitulo)} <span style="font-weight:400;color:var(--text3);">• Em aberto: ${fmtResumoFinanceiro(saldoPagar)}</span></div>`;
+      valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldoPagar > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Parcela ${parcelaInfo}: ${fmtResumoFinanceiro(valorTitulo)} <span style="font-weight:400;color:var(--text3);">• Total: ${fmtResumoFinanceiro(totalGeralTitulo)} • Em aberto: ${fmtResumoFinanceiro(saldoPagar)}</span></div>`;
       const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;

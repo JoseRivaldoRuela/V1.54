@@ -28,8 +28,66 @@ function contasFmtDataBR(value) {
   return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('pt-BR');
 }
 
+function contasNumeroInput(value) {
+  let raw=String(value??'').trim().replace(/\s|R\$/gi,'');
+  if(raw.includes(',') && raw.includes('.')) raw=raw.replace(/\./g,'').replace(',','.');
+  else raw=raw.replace(',','.');
+  const numero=Number(raw);
+  return Number.isFinite(numero)?numero:0;
+}
+
+function novoGrupoParcelamento() {
+  return globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{
+    const r=Math.random()*16|0; return (c==='x'?r:(r&3|8)).toString(16);
+  });
+}
+
+function rotuloParcela(conta) {
+  const legado=/Parcela\s+(\d+)\/(\d+)/i.exec(conta?.observacoes||'');
+  const metadadosValidos=Number(conta?.total_parcelas||1)>1;
+  const numero=Math.max(1,Number(metadadosValidos?conta.numero_parcela:(legado?.[1]||conta?.numero_parcela||1)));
+  const total=Math.max(1,Number(metadadosValidos?conta.total_parcelas:(legado?.[2]||conta?.total_parcelas||1)));
+  return `${numero}/${total}`;
+}
+
+function grupoParcelasLegado(conta,tipo) {
+  const match=/Parcela\s+(\d+)\/(\d+)/i.exec(conta?.observacoes||'');
+  const total=Number(match?.[2]||0);
+  if(total<2)return [conta];
+  const idCampo=tipo==='receber'?'id_conta':'id_conta_pagar';
+  const pessoaCampo=tipo==='receber'?'id_cliente':'id_fornecedor';
+  const origemCampo=tipo==='receber'?'id_venda':'id_compra';
+  const candidatos=(items||[]).filter(x=>!x[origemCampo]&&String(x[pessoaCampo])===String(conta[pessoaCampo])&&Number((/Parcela\s+(\d+)\/(\d+)/i.exec(x.observacoes||''))?.[2]||0)===total).sort((a,b)=>Number(a[idCampo])-Number(b[idCampo]));
+  for(let i=0;i<=candidatos.length-total;i++){
+    const bloco=candidatos.slice(i,i+total);
+    const numeros=bloco.map(x=>Number((/Parcela\s+(\d+)\/(\d+)/i.exec(x.observacoes||''))?.[1]||0));
+    if(numeros.every((n,idx)=>n===idx+1)&&bloco.some(x=>Number(x[idCampo])===Number(conta[idCampo])))return bloco;
+  }
+  return [conta];
+}
+
+function grupoParcelasTitulo(conta,tipo) {
+  const idCampo=tipo==='receber'?'id_conta':'id_conta_pagar';
+  if(conta?.grupo_parcelamento&&Number(conta.total_parcelas||1)>1){
+    const grupo=(items||[]).filter(x=>String(x.grupo_parcelamento)===String(conta.grupo_parcelamento));
+    if(grupo.length>1)return grupo;
+  }
+  const legado=grupoParcelasLegado(conta,tipo);
+  return legado.length?legado:[conta].filter(x=>x?.[idCampo]);
+}
+
+function valorTotalParcelas(conta,tipo) {
+  const grupoReal=grupoParcelasTitulo(conta,tipo);
+  if(grupoReal.length>1)return grupoReal.reduce((s,x)=>s+Number(x.valor_original||0),0);
+  const gravado=Number(conta?.valor_total_titulo||0);
+  if(gravado>0)return gravado;
+  const chave=conta?.grupo_parcelamento?'grupo_parcelamento':(tipo==='receber'&&conta?.id_venda?'id_venda':tipo==='pagar'&&conta?.id_compra?'id_compra':null);
+  if(!chave)return grupoParcelasTitulo(conta,tipo).reduce((s,x)=>s+Number(x.valor_original||0),0);
+  return (items||[]).filter(x=>String(x[chave])===String(conta[chave])).reduce((s,x)=>s+Number(x.valor_original||0),0);
+}
+
 async function renderFormConta(c) {
-  await loadCacheCobrancas();
+  await Promise.all([loadCacheCobrancas(), loadCaches()]);
   // Buscar código da venda separadamente
   let codigoVenda = c?.codigo_venda || '';
   if(c?.id_venda) {
@@ -39,8 +97,58 @@ async function renderFormConta(c) {
   const v = f => c ? (c[f]??'') : '';
   const pagOpts = cacheCobrancas.map(t =>
     `<option value="${t.descricao}" ${v('meio_pagamento')===t.descricao?'selected':''}>${t.descricao}</option>`).join('');
+  const clienteOpts = cacheClientes.map(cl => {
+    const selecionado=String(v('id_cliente'))===String(cl.id_cliente);
+    const inativo=cl.ativo===false;
+    return `<option value="${cl.id_cliente}" ${selecionado?'selected':''} ${inativo&&!selecionado?'disabled':''}>${cl.nome_fantasia||cl.razao_social||'Cliente #'+cl.id_cliente}${inativo?' (inativo)':''}</option>`;
+  }).join('');
   const statusOpts = ['PENDENTE','RECEBIDO'].map(s =>
     `<option value="${s}" ${(v('status_recebimento')||'Pendente')===s?'selected':''}>${s}</option>`).join('');
+
+  if(isNew && !c) {
+    const hojeInput=contasFmtDataLocal(new Date());
+    document.getElementById('content-body').innerHTML=`
+      <div class="section-label"><span>Novo título a receber</span></div>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label class="form-label">Cliente *</label>
+          <select class="form-input form-select" id="f-id_cliente"><option value="">${cacheClientes.length?'Selecione o cliente...':'Nenhum cliente cadastrado nesta empresa — use o botão +'}</option>${clienteOpts}</select>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Valor do título (R$) *</label>
+          <input class="form-input" type="text" inputmode="decimal" autocomplete="off" id="f-valor_original" value="" placeholder="Ex: 150,00" style="font-size:18px;font-weight:700;" autofocus/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Primeiro vencimento *</label>
+          <input class="form-input" type="date" id="f-data_vencimento" value="${hojeInput}"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Meio de pagamento</label>
+          <select class="form-input form-select" id="f-meio_pagamento"><option value="">Selecione...</option>${pagOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Parcelas</label>
+          <input class="form-input" type="number" min="1" step="1" id="f-novas-parcelas" value="1"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Intervalo em dias (se parcelado)</label>
+          <input class="form-input" type="number" min="0" step="1" id="f-novas-dias" value="0"/>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Observações</label>
+          <textarea class="form-textarea" id="f-observacoes" placeholder="Descrição ou referência do título"></textarea>
+        </div>
+      </div>
+      <input type="hidden" id="f-status_recebimento" value="PENDENTE"/>
+      <input type="hidden" id="f-valor_recebido" value="0"/>
+      <input type="hidden" id="f-data_recebimento" value=""/>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="btn-save" onclick="saveConta()">Cadastrar título</button>
+        <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
+      </div>`;
+    setTimeout(()=>document.getElementById('f-valor_original')?.focus(),0);
+    return;
+  }
 
   const vencDate = c?.data_vencimento ? contasDateLocal(c.data_vencimento) : new Date();
   const hoje = new Date();
@@ -50,16 +158,20 @@ async function renderFormConta(c) {
   const saldoAberto = contasValorAberto(c);
   const agora = new Date();
   const baixaDataPadrao = `${agora.getFullYear()}-${String(agora.getMonth()+1).padStart(2,'0')}-${String(agora.getDate()).padStart(2,'0')}T${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
+  const vencimentoManual = v('data_vencimento') || contasFmtDataLocal(new Date());
+  const origemVenda=!!c?.id_venda;
 
   document.getElementById('content-body').innerHTML = `
     <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-      <span>Dados da Conta</span>
-      ${c?.status_recebimento === 'RECEBIDO' ? `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:11px;" onclick="reativarRecebimento()">↺ Reativar recebimento</button>` : ''}
+      <span>Dados da Conta · Parcela ${rotuloParcela(c)} · Total ${contasFmtMoeda(valorTotalParcelas(c,'receber'))}</span>
+      ${c?.status_recebimento === 'RECEBIDO' ? `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:11px;" onclick="reativarRecebimento()">↺ Reativar baixa</button>` : ''}
     </div>
     <div class="form-grid">
       <div class="form-group full">
         <label class="form-label">Cliente</label>
-        <input class="form-input" value="${c?.clientes?.nome_fantasia||c?.clientes?.razao_social||''}" readonly style="color:var(--text2);"/>
+        <select class="form-input form-select" id="f-id_cliente" ${origemVenda?'disabled':''}>
+          <option value="">Selecione o cliente...</option>${clienteOpts}
+        </select>
       </div>
       <div class="form-group">
         <label class="form-label">Venda Referência</label>
@@ -89,11 +201,11 @@ async function renderFormConta(c) {
     <div class="form-grid">
       <div class="form-group">
         <label class="form-label">Valor Original (R$)</label>
-        <input class="form-input" type="number" step="0.01" id="f-valor_original" value="${v('valor_original')}" placeholder="0,00"/>
+        <input class="form-input" type="text" inputmode="decimal" id="f-valor_original" value="${v('valor_original')}" placeholder="0,00" ${origemVenda?'readonly':''}/>
       </div>
       <div class="form-group">
         <label class="form-label">Valor Recebido (R$)</label>
-        <input class="form-input" type="number" step="0.01" id="f-valor_recebido" value="${v('valor_recebido')}" placeholder="0,00"/>
+        <input class="form-input" type="text" inputmode="decimal" id="f-valor_recebido" value="${v('valor_recebido')}" placeholder="0,00" ${isNew?'readonly':''}/>
       </div>
     </div>
 
@@ -108,7 +220,7 @@ async function renderFormConta(c) {
       </div>
       <div class="form-group">
         <label class="form-label">Data de Vencimento ${atrasado?'<span style="color:var(--danger)">⚠️ VENCIDA</span>':''}</label>
-        <input class="form-input" type="date" id="f-data_vencimento" value="${v('data_vencimento')}" style="${atrasado?'border-color:var(--danger);':''}"/>
+        <input class="form-input" type="date" id="f-data_vencimento" value="${vencimentoManual}" style="${atrasado?'border-color:var(--danger);':''}"/>
       </div>
       <div class="form-group">
         <label class="form-label">Data de Recebimento</label>
@@ -116,6 +228,11 @@ async function renderFormConta(c) {
       </div>
     </div>
 
+    ${isNew ? `<div class="section-label"><span>Condição do lançamento</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="f-novas-parcelas" value="1"/></div>
+      <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="f-novas-dias" value="0"/></div>
+    </div>` : ''}
     <div class="section-label"><span>Observações</span></div>
     <div class="form-group">
       <textarea class="form-textarea" id="f-observacoes" placeholder="Observações...">${v('observacoes')}</textarea>
@@ -128,12 +245,57 @@ async function renderFormConta(c) {
       <div class="form-group"><label class="form-label">Data da baixa</label><input class="form-input" type="datetime-local" id="f-baixa_data" value="${baixaDataPadrao}"/></div>
       <div class="form-group full"><label class="form-label">Observacao da baixa</label><input class="form-input" id="f-baixa_obs" placeholder="Ex: pagamento parcial, comprovante..."/></div>
     </div>` : ''}
+    ${c && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? `
+    <div class="section-label"><span>Parcelar esta conta</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="2"/></div>
+      <div class="form-group"><label class="form-label">Dias entre parcelas</label><input class="form-input" type="number" min="0" step="1" id="f-reparcelar-dias" value="0"/></div>
+    </div>` : ''}
     <div class="form-actions">
-      <button class="btn btn-primary" id="btn-save" onclick="saveConta()">✓ Salvar</button>
+      ${!origemVenda?'<button class="btn btn-primary" id="btn-save" onclick="saveConta()">✓ Salvar</button>':''}
+      ${c&&c.status_recebimento!=='RECEBIDO'?'<button class="btn btn-danger" onclick="excluirContaReceber()">Excluir</button>':''}
+      ${c && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? '<button class="btn btn-secondary" onclick="parcelarContaReceber()">Parcelar conta</button>' : ''}
       ${c && saldoAberto > 0.005 ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="baixarContaParcial()">Baixar Valor</button>` : ''}
-      ${c?.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">💰 Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">💰 Recebido</span>'}
+      ${c ? (c.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">💰 Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">💰 Recebido</span>') : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
     </div>`;
+}
+
+async function excluirContaReceber() {
+  const conta=items.find(x=>Number(x.id_conta)===Number(currentId));
+  if(!conta)return;
+  if(conta.id_venda){toast('Este título veio de uma venda. Exclua a venda para remover seus títulos.','error');return;}
+  const grupo=grupoParcelasTitulo(conta,'receber');
+  if(!grupo.length){toast('Parcelas não encontradas.','error');return;}
+  if(grupo.some(x=>Number(x.valor_recebido||0)>0||x.status_recebimento==='RECEBIDO')){toast('Não é possível excluir: uma ou mais parcelas já possuem recebimento.','error');return;}
+  if(!confirm(`Excluir todas as ${grupo.length} parcelas deste lançamento?`))return;
+  const ids=grupo.map(x=>Number(x.id_conta)).filter(Boolean);
+  const ok=await apiDelete(`contas_receber?id_conta=in.(${ids.join(',')})`);
+  if(ok){invalidarResumoContasVendas();toast('Todas as parcelas foram excluídas.','success');await loadItems();await cancelForm();}
+  else toast('Erro ao excluir as parcelas.','error');
+}
+
+async function parcelarContaReceber() {
+  const conta = items.find(x=>Number(x.id_conta)===Number(currentId));
+  if(!conta || conta.status_recebimento==='RECEBIDO' || Number(conta.valor_recebido||0)>0){ toast('Somente contas sem recebimentos podem ser parceladas.','error'); return; }
+  const qtd=Math.max(2,parseInt(document.getElementById('f-reparcelar-quantidade')?.value||'2',10)||2);
+  const dias=Math.max(0,parseInt(document.getElementById('f-reparcelar-dias')?.value||'0',10)||0);
+  if(dias===0){toast('Informe um intervalo em dias maior que zero para parcelar.','error');return;}
+  if(!confirm(`Dividir esta conta em ${qtd} parcelas?`)) return;
+  const total=Number(document.getElementById('f-valor_original')?.value||conta.valor_original||0);
+  if(total < qtd/100){toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');return;}
+  const base=Math.floor((total/qtd)*100)/100;
+  const venc=document.getElementById('f-data_vencimento')?.value||conta.data_vencimento;
+  const obsBase=(document.getElementById('f-observacoes')?.value||conta.observacoes||'').replace(/^Parcela \d+\/\d+\s*-\s*/,'');
+  const grupo=conta.grupo_parcelamento||novoGrupoParcelamento();
+  const comum={id_venda:conta.id_venda||null,id_cliente:Number(document.getElementById('f-id_cliente')?.value||conta.id_cliente)||null,meio_pagamento:document.getElementById('f-meio_pagamento')?.value||null,status_recebimento:'PENDENTE',valor_recebido:0,data_recebimento:null,grupo_parcelamento:grupo,total_parcelas:qtd,valor_total_titulo:total};
+  const dados=Array.from({length:qtd},(_,idx)=>({...comum,numero_parcela:idx+1,data_vencimento:addDaysToDateInput(venc,idx*dias),valor_original:idx===qtd-1?Number((total-base*(qtd-1)).toFixed(2)):base,observacoes:obsBase||null}));
+  const original=dados.shift();
+  const atualizada=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,original);
+  if(!atualizada.ok){toast('Erro ao atualizar a primeira parcela.','error');return;}
+  const criadas=await apiPost('contas_receber',dados);
+  if(!criadas.ok){toast('Primeira parcela salva, mas houve erro ao criar as demais.','error');return;}
+  invalidarResumoContasVendas(); toast(`${qtd} parcelas geradas!`,'success'); await loadItems(); openItem(currentId);
 }
 
 async function saveConta() {
@@ -141,10 +303,11 @@ async function saveConta() {
   btn.disabled=true; btn.textContent='Salvando...';
   const statusSalvo = document.getElementById('f-status_recebimento').value.toUpperCase();
   const dataRecebimentoInformada = document.getElementById('f-data_recebimento').value;
-  const valorOriginalForm = parseFloat(document.getElementById('f-valor_original').value||0);
-  const valorRecebidoDigitado = parseFloat(document.getElementById('f-valor_recebido').value||0)||0;
+  const valorOriginalForm = contasNumeroInput(document.getElementById('f-valor_original').value);
+  const valorRecebidoDigitado = isNew ? 0 : contasNumeroInput(document.getElementById('f-valor_recebido').value);
   const valorRecebidoForm = statusSalvo === 'RECEBIDO' ? valorOriginalForm : valorRecebidoDigitado;
   const data = {
+    id_cliente: Number(document.getElementById('f-id_cliente').value)||null,
     status_recebimento: statusSalvo === 'RECEBIDO' ? 'RECEBIDO' : contasStatusBancoPorValores(valorOriginalForm, valorRecebidoForm),
     valor_original: valorOriginalForm,
     valor_recebido: valorRecebidoForm,
@@ -155,6 +318,31 @@ async function saveConta() {
       : (statusSalvo === 'RECEBIDO' ? new Date().toISOString() : null),
     observacoes: document.getElementById('f-observacoes').value.trim()||null
   };
+  if(!data.id_cliente){toast('Selecione o cliente.','error');btn.disabled=false;btn.textContent='Salvar';return;}
+  if(data.valor_original<=0){toast('Informe um valor maior que zero.','error');btn.disabled=false;btn.textContent='Salvar';return;}
+  if(!data.data_vencimento){toast('Informe o primeiro vencimento.','error');btn.disabled=false;btn.textContent='Salvar';return;}
+  if(isNew) {
+    const qtd=Math.max(1,parseInt(document.getElementById('f-novas-parcelas')?.value||'1',10)||1);
+    const dias=Math.max(0,parseInt(document.getElementById('f-novas-dias')?.value||'0',10)||0);
+    if(qtd>1&&dias===0){toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error');btn.disabled=false;btn.textContent='Salvar';return;}
+    if(data.valor_original<qtd/100){toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');btn.disabled=false;return;}
+    const total=data.valor_original, base=Math.floor((total/qtd)*100)/100;
+    const grupo=novoGrupoParcelamento();
+    const registros=Array.from({length:qtd},(_,idx)=>{
+      const valor=idx===qtd-1?Number((total-base*(qtd-1)).toFixed(2)):base;
+      return {...data,grupo_parcelamento:grupo,numero_parcela:idx+1,total_parcelas:qtd,valor_total_titulo:total,data_vencimento:addDaysToDateInput(data.data_vencimento,idx*dias),valor_original:valor,valor_recebido:data.status_recebimento==='RECEBIDO'?valor:0,observacoes:data.observacoes};
+    });
+    const criado=await apiPost('contas_receber',registros.map(({data_recebimento,...registro})=>registro));
+    if(criado.ok){invalidarResumoContasVendas();toast(qtd>1?`${qtd} contas a receber criadas!`:'Conta a receber criada!','success');await loadItems();const primeira=Array.isArray(criado.data)?criado.data[0]:criado.data;if(primeira)openItem(primeira.id_conta);}
+    else{
+      const erro=[criado.data?.message,criado.data?.details,criado.data?.hint].filter(Boolean).join(' - ')||'erro';
+      const meioFixo=/meio_pagamento|pagamento/i.test(erro)&&/check constraint|violates check|restri[cç][aã]o/i.test(erro);
+      toast(meioFixo?'Este meio de pagamento ainda está bloqueado por uma validação antiga do banco. Execute sql/liberar_meios_pagamento_cadastrados.sql.':'Erro: '+erro,'error');
+      btn.disabled=false;btn.textContent='Salvar';
+    }
+    return;
+  }
+  if(items.find(x=>Number(x.id_conta)===Number(currentId))?.id_venda){toast('O valor deste título vem da venda. Altere a venda de origem.','error');btn.disabled=false;return;}
   const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
   if(ok){ invalidarResumoContasVendas(); toast('Conta atualizada!','success'); await loadItems(); openItem(currentId); }
   else{ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='✓ Salvar'; }

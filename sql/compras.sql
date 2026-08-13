@@ -9,6 +9,8 @@ create table if not exists public.compras (
   valor_total numeric(12,2) not null,
   meio_pagamento text,
   prazo_dias integer not null default 0,
+  quantidade_parcelas integer not null default 1,
+  dias_vencimento integer not null default 0,
   data_vencimento date,
   status_compra text not null default 'PENDENTE',
   estoque_anterior numeric(12,2),
@@ -62,6 +64,8 @@ alter table public.compras
   add column if not exists valor_total numeric(12,2),
   add column if not exists meio_pagamento text,
   add column if not exists prazo_dias integer not null default 0,
+  add column if not exists quantidade_parcelas integer not null default 1,
+  add column if not exists dias_vencimento integer not null default 0,
   add column if not exists data_vencimento date,
   add column if not exists status_compra text not null default 'PENDENTE',
   add column if not exists estoque_anterior numeric(12,2),
@@ -106,61 +110,9 @@ create index if not exists idx_compra_itens_produto on public.compra_itens(id_pr
 create index if not exists idx_contas_pagar_compra on public.contas_pagar(id_compra);
 create index if not exists idx_contas_pagar_vencimento on public.contas_pagar(data_vencimento);
 
-alter table public.compras no force row level security;
-alter table public.compra_itens no force row level security;
-alter table public.contas_pagar no force row level security;
-alter table public.compras disable row level security;
-alter table public.compra_itens disable row level security;
-alter table public.contas_pagar disable row level security;
-
-drop policy if exists compras_anon_all on public.compras;
-drop policy if exists compras_auth_all on public.compras;
-drop policy if exists compra_itens_anon_all on public.compra_itens;
-drop policy if exists compra_itens_auth_all on public.compra_itens;
-drop policy if exists contas_pagar_anon_all on public.contas_pagar;
-drop policy if exists contas_pagar_auth_all on public.contas_pagar;
-
-create policy compras_anon_all
-  on public.compras
-  for all
-  to anon
-  using (true)
-  with check (true);
-
-create policy compras_auth_all
-  on public.compras
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy compra_itens_anon_all
-  on public.compra_itens
-  for all
-  to anon
-  using (true)
-  with check (true);
-
-create policy compra_itens_auth_all
-  on public.compra_itens
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy contas_pagar_anon_all
-  on public.contas_pagar
-  for all
-  to anon
-  using (true)
-  with check (true);
-
-create policy contas_pagar_auth_all
-  on public.contas_pagar
-  for all
-  to authenticated
-  using (true)
-  with check (true);
+-- O isolamento destas tabelas e configurado por multiempresa_seguranca.sql.
+-- Nunca desative RLS nem crie politicas abertas aqui: isso faria compras de uma
+-- empresa aparecerem para todas as demais.
 
 grant select, insert, update, delete on public.compras to anon, authenticated;
 grant select, insert, update, delete on public.compra_itens to anon, authenticated;
