@@ -674,8 +674,48 @@ async function logout(){
   location.href='/login.html';
 }
 
+function atualizarBotaoTema() {
+  const claro = document.documentElement.dataset.theme === 'claro';
+  const btn = document.getElementById('btn-tema');
+  if(!btn) return;
+  btn.textContent = claro ? '☾' : '☀';
+  btn.title = claro ? 'Ativar tema escuro' : 'Ativar tema claro';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function alternarTema() {
+  const claro = document.documentElement.dataset.theme === 'claro';
+  if(claro) delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = 'claro';
+  try { localStorage.setItem('jr-painel-tema', claro ? 'escuro' : 'claro'); } catch(e) {}
+  atualizarBotaoTema();
+}
+
+const FINANCAS_ORIGIN = 'https://financas-jr-sistemas.vercel.app';
+
+function abrirFinancas() {
+  const sessao = sessaoAtual();
+  if(!sessao?.token) {
+    toast('Sua sessão expirou. Entre novamente para abrir Finanças.','error');
+    return;
+  }
+  const janela = window.open(`${FINANCAS_ORIGIN}/login.html?origem=vendas`, 'jr_financas');
+  if(!janela) {
+    toast('Permita a abertura de janelas para acessar Finanças.','error');
+    return;
+  }
+  const entregarSessao = event => {
+    if(event.origin !== FINANCAS_ORIGIN || event.source !== janela || event.data?.type !== 'JR_FINANCAS_READY') return;
+    janela.postMessage({type:'JR_SESSION_TRANSFER',session:sessao}, FINANCAS_ORIGIN);
+    window.removeEventListener('message', entregarSessao);
+  };
+  window.addEventListener('message', entregarSessao);
+  setTimeout(()=>window.removeEventListener('message', entregarSessao), 30000);
+}
+
 // INIT
 async function init(){
+  atualizarBotaoTema();
   document.getElementById('user-info').textContent=[usuario?.empresa,usuario?.nome].filter(Boolean).join(' · ');
   // Verificar admin direto no banco - campo id na sessão
   const uid = usuario?.id || usuario?.id_usuario;

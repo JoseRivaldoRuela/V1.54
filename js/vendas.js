@@ -714,7 +714,7 @@ async function renderFormVenda(c) {
       </div>
       <div class="form-group">
         <label class="form-label">Vencimento</label>
-        <input class="form-input" type="date" id="f-data_vencimento" value="${dataVencimentoDefault}" readonly/>
+        <input class="form-input" type="date" id="f-data_vencimento" value="${dataVencimentoDefault}"/>
       </div>
       <div class="form-group">
         <label class="form-label">Desconto Total (R$)</label>
@@ -731,6 +731,7 @@ async function renderFormVenda(c) {
       <div class="form-grid" style="margin-bottom:10px;">
         <div class="form-group full">
           <label class="form-label">Produto</label>
+          ${abasCategoriasProdutosPedido('venda')}
           <select class="form-input form-select" id="item-produto" onchange="preencherPreco()">
             <option value="">Selecione o produto...</option>
             ${cacheProdutos.map(p=>`<option value="${p.id_produto}" data-preco="${p.preco_venda}">${p.nome_mercadoria} — R$ ${Number(p.preco_venda||0).toFixed(2)}</option>`).join('')}
@@ -794,6 +795,7 @@ async function renderFormVenda(c) {
   renderItens();
   calcTotais();
   decorarProdutosVenda();
+  filtrarProdutosPedido('venda');
 }
 
 function produtoVendaComposicao(p) {
@@ -944,7 +946,7 @@ function editarItem(idx) {
   const item=itensVenda[idx];
   if(!item)return;
   itemVendaEmEdicao=idx;
-  document.getElementById('item-produto').value=String(item.id_produto||'');
+  selecionarProdutoPedido('venda', item.id_produto);
   document.getElementById('item-qty').value=String(item.quantidade||1);
   document.getElementById('item-preco').value=Number(item.preco_unitario||0).toFixed(2);
   document.getElementById('item-desconto').value=Number(item.desconto_item||0).toFixed(2);

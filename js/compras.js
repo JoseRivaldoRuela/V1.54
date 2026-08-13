@@ -487,6 +487,7 @@ async function renderFormCompra(c) {
         <div class="form-grid" style="margin-bottom:10px;">
           <div class="form-group full">
             <label class="form-label">Produto</label>
+            ${abasCategoriasProdutosPedido('compra')}
             <select class="form-input form-select" id="compra-item-produto" onchange="preencherCompraProduto()">
               <option value="">Selecione...</option>${prodOpts}
             </select>
@@ -520,6 +521,7 @@ async function renderFormCompra(c) {
     </div>`;
 
   renderItensCompra(status);
+  if(!bloqueado) filtrarProdutosPedido('compra');
 }
 
 function preencherCompraProduto() {
@@ -578,7 +580,7 @@ function editarItemCompra(idx) {
   const item=itensCompraAtual[idx];
   if(!item)return;
   itemCompraEmEdicao=idx;
-  document.getElementById('compra-item-produto').value=String(item.id_produto||'');
+  selecionarProdutoPedido('compra', item.id_produto);
   document.getElementById('compra-item-qtd').value=String(item.quantidade||1);
   document.getElementById('compra-item-preco').value=Number(item.preco_entrada||0).toFixed(2);
   calcularSubtotalItemCompra();
