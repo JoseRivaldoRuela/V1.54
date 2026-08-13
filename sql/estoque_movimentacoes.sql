@@ -20,7 +20,8 @@ create index if not exists idx_estoque_mov_produto
 create index if not exists idx_estoque_mov_data
   on estoque_movimentacoes(data_movimentacao desc);
 
-alter table estoque_movimentacoes disable row level security;
+-- O isolamento desta tabela e configurado por multiempresa_seguranca.sql.
+-- RLS nao deve ser desativado neste script.
 
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on estoque_movimentacoes to anon, authenticated;

@@ -1,4 +1,7 @@
 
+let itemVendaEmEdicao = null;
+let itensVendaEditaveis = true;
+
 async function renderDashboard() {
   const body = document.getElementById('content-body');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
@@ -601,6 +604,8 @@ async function renderFormVenda(c) {
   await loadCaches();
   await loadCacheCobrancas();
   itensVenda = [];
+  itemVendaEmEdicao = null;
+  itensVendaEditaveis = !c || c.status_entrega !== 'ENTREGUE';
 
   // Carregar itens existentes se for edição
   if(c) {
@@ -654,8 +659,11 @@ async function renderFormVenda(c) {
   const dataVencimentoDefault = v('data_vencimento') || addDaysToDateInput(dataVendaDefault.slice(0,10), diasVencimento);
   const pagOpts = cacheCobrancas.map(t =>
     `<option value="${t.descricao}" ${meioPagamentoPadrao===t.descricao?'selected':''}>${t.descricao}</option>`).join('');
-  const cliOpts = cacheClientes.map(cl =>
-    `<option value="${cl.id_cliente}" ${String(v('id_cliente'))===String(cl.id_cliente)?'selected':''}>${cl.nome_fantasia||cl.razao_social}</option>`).join('');
+  const cliOpts = cacheClientes.map(cl => {
+    const selecionado=String(v('id_cliente'))===String(cl.id_cliente);
+    const inativo=cl.ativo===false;
+    return `<option value="${cl.id_cliente}" ${selecionado?'selected':''} ${inativo&&!selecionado?'disabled':''}>${cl.nome_fantasia||cl.razao_social||'Cliente #'+cl.id_cliente}${inativo?' (inativo)':''}</option>`;
+  }).join('');
   const entregaActions = isNew ? '' : c?.status_entrega === 'ENTREGUE'
     ? `<span class="pill on" style="padding:8px 14px;font-size:12px;">✅ Entregue</span><button class="btn btn-danger" onclick="cancelarEntrega(${c.id_venda})">Cancelar Entrega</button>`
     : `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarEntregue(${c.id_venda})">✅ Marcar Entregue</button>`;
@@ -745,7 +753,7 @@ async function renderFormVenda(c) {
           <input class="form-input" id="item-subtotal" value="R$ 0,00" readonly style="color:var(--accent);font-weight:600;"/>
         </div>
       </div>
-      <button class="btn btn-primary" style="width:100%;" onclick="adicionarItem()">+ Adicionar Item</button>
+      <button class="btn btn-primary" id="btn-adicionar-item-venda" style="width:100%;" onclick="adicionarItem()">+ Adicionar Item</button>
     </div>
 
     <!-- Lista de itens -->
@@ -887,6 +895,7 @@ function calcItemSubtotal() {
 }
 
 function adicionarItem() {
+  if(!itensVendaEditaveis){toast('Somente vendas em aberto permitem alterar itens.','error');return;}
   const sel = document.getElementById('item-produto');
   const idProd = sel.value;
   const nomeProd = sel.options[sel.selectedIndex]?.text?.split(' — ')[0] || '';
@@ -901,7 +910,7 @@ function adicionarItem() {
   const subtotal = Math.max(0,(qty*preco)-desc);
   const prodCache = cacheProdutos.find(p=>String(p.id_produto)===String(idProd));
   const precoCusto = prodCache ? Number(prodCache.preco_custo||0) : 0;
-  itensVenda.push({
+  const itemAtualizado = {
     id_produto:parseInt(idProd),
     nome_produto:prodCache?.nome_mercadoria || nomeProd,
     unidade: prodCache?.unidade || '',
@@ -911,7 +920,10 @@ function adicionarItem() {
     desconto_item:desc,
     subtotal,
     preco_custo:precoCusto
-  });
+  };
+  if(itemVendaEmEdicao===null) itensVenda.push(itemAtualizado);
+  else itensVenda[itemVendaEmEdicao]=itemAtualizado;
+  itemVendaEmEdicao=null;
 
   // Limpar campos
   document.getElementById('item-produto').value='';
@@ -919,13 +931,34 @@ function adicionarItem() {
   document.getElementById('item-preco').value='';
   document.getElementById('item-desconto').value='0';
   document.getElementById('item-subtotal').value='R$ 0,00';
+  const btnItem=document.getElementById('btn-adicionar-item-venda');
+  if(btnItem)btnItem.textContent='+ Adicionar Item';
   atualizarInfoProdutoVenda();
 
   renderItens();
   calcTotais();
 }
 
+function editarItem(idx) {
+  if(!itensVendaEditaveis)return;
+  const item=itensVenda[idx];
+  if(!item)return;
+  itemVendaEmEdicao=idx;
+  document.getElementById('item-produto').value=String(item.id_produto||'');
+  document.getElementById('item-qty').value=String(item.quantidade||1);
+  document.getElementById('item-preco').value=Number(item.preco_unitario||0).toFixed(2);
+  document.getElementById('item-desconto').value=Number(item.desconto_item||0).toFixed(2);
+  const btn=document.getElementById('btn-adicionar-item-venda');
+  if(btn)btn.textContent='✓ Salvar alteração do item';
+  atualizarInfoProdutoVenda();
+  calcItemSubtotal();
+  document.getElementById('item-produto')?.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
 function removerItem(idx) {
+  if(!itensVendaEditaveis)return;
+  if(itemVendaEmEdicao===idx)itemVendaEmEdicao=null;
+  else if(itemVendaEmEdicao!==null&&itemVendaEmEdicao>idx)itemVendaEmEdicao--;
   itensVenda.splice(idx,1);
   renderItens();
   calcTotais();
@@ -961,7 +994,7 @@ function renderItens() {
           <td style="padding:6px 8px;text-align:right;color:var(--danger);">${item.desconto_item>0?'- R$ '+Number(item.desconto_item).toFixed(2):'-'}</td>
           <td style="padding:6px 8px;text-align:right;color:var(--accent);font-weight:600;">R$ ${Number(item.subtotal).toFixed(2)}</td>
           <td style="padding:6px 8px;text-align:right;color:${lucroColor};font-weight:600;">${custo>0?(lucroItem>=0?'R$ ':'- R$ ')+Math.abs(lucroItem).toFixed(2):'-'}</td>
-          <td style="padding:6px 8px;text-align:center;"><button onclick="removerItem(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;">✕</button></td>
+          <td style="padding:6px 8px;text-align:center;white-space:nowrap;">${itensVendaEditaveis?`<button class="btn btn-secondary" onclick="editarItem(${i})" style="padding:4px 7px;font-size:10px;">Alterar</button> <button class="btn btn-danger" onclick="removerItem(${i})" style="padding:4px 7px;font-size:10px;">Excluir</button>`:''}</td>
         </tr>`;}).join('')}
       </tbody>
     </table>
@@ -971,7 +1004,7 @@ function renderItens() {
 function calcTotais() {
   const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
   const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
-  const totalCusto = isNew ? totalCustoCalculado : Number(items.find(x=>Number(x.id_venda)===Number(currentId))?.valor_produtos || 0);
+  const totalCusto = totalCustoCalculado;
   const desconto = parseFloat(document.getElementById('f-desconto_total')?.value||0);
   const final = Math.max(0,totalProd-desconto);
   const lucro = final - totalCusto;
@@ -1473,6 +1506,7 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
       ? toLocalDateInput(venda?.data_entrega || venda?.data_venda || new Date())
       : toLocalDateInput());
   const obs = (opcoes.observacoes || '').trim();
+  const grupoParcelamento = novoGrupoParcelamento();
 
   const contasData = Array.from({length:totalParcelas}, (_,idx) => {
     const valorParcela = idx === totalParcelas - 1
@@ -1487,6 +1521,10 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
       meio_pagamento: pagamento,
       status_recebimento: pagamentoRecebido ? 'RECEBIDO' : 'PENDENTE',
       data_recebimento: pagamentoRecebido ? new Date().toISOString() : null
+      ,grupo_parcelamento: grupoParcelamento
+      ,numero_parcela: idx+1
+      ,total_parcelas: totalParcelas
+      ,valor_total_titulo: valorConta
     };
     const parcelaLabel = totalParcelas > 1 ? `Parcela ${idx+1}/${totalParcelas}` : '';
     conta.observacoes = [parcelaLabel, obs].filter(Boolean).join(' - ') || null;
@@ -1506,12 +1544,15 @@ async function saveVenda() {
   if(!id_cliente){ toast('Selecione o cliente','error'); return; }
   if(!data_venda){ toast('Data da venda é obrigatória','error'); return; }
   if(itensVenda.length===0){ toast('Adicione pelo menos um item','error'); return; }
+  const quantidadeParcelasForm=Math.max(1,parseInt(document.getElementById('f-quantidade_parcelas').value||'1',10)||1);
+  const diasParcelasForm=Math.max(0,parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0);
+  if(quantidadeParcelasForm>1&&diasParcelasForm===0){toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error');return;}
 
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
 
   const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
   const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
-  const totalCusto = isNew ? totalCustoCalculado : Number(items.find(x=>Number(x.id_venda)===Number(currentId))?.valor_produtos || 0);
+  const totalCusto = totalCustoCalculado;
   const desconto = parseFloat(document.getElementById('f-desconto_total').value||0);
   const final = Math.max(0,totalProd-desconto);
   const status = document.getElementById('f-status_entrega').value || 'PENDENTE';
@@ -1538,8 +1579,8 @@ async function saveVenda() {
     desconto_total: desconto,
     valor_final: final,
     meio_pagamento: meioPagamentoForm,  // banco aceita: PIX,BOLETO,DINHEIRO,CARTAO
-    quantidade_parcelas: Math.max(1, parseInt(document.getElementById('f-quantidade_parcelas').value||'1',10)||1),
-    dias_vencimento: Math.max(0, parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0),
+    quantidade_parcelas: quantidadeParcelasForm,
+    dias_vencimento: diasParcelasForm,
     data_vencimento: vencimentoSeguro,
     observacoes: document.getElementById('f-observacoes').value.trim()||null
   };
@@ -1548,7 +1589,12 @@ async function saveVenda() {
 
   if(isNew) {
     const{ok,data:res}=await apiPost('vendas',dadosVenda);
-    if(!ok){ toast('Erro ao salvar venda: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='+ Registrar Venda'; return; }
+    if(!ok){
+      const erro=res?.message||'erro';
+      const codigoGlobal=/vendas_codigo_venda_key|duplicate key/i.test(erro);
+      toast(codigoGlobal?'O código da venda ainda está configurado como único entre todas as empresas. Execute sql/corrigir_codigo_venda_por_empresa.sql.':'Erro ao salvar venda: '+erro,'error');
+      btn.disabled=false; btn.textContent='+ Registrar Venda'; return;
+    }
     vendaId = (Array.isArray(res)?res[0]:res)?.id_venda;
     const itensRes = await insertVendaItens(vendaId);
     if(!itensRes.ok) {

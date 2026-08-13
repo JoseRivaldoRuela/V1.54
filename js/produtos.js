@@ -30,12 +30,13 @@ async function saveTipo() {
 async function loadCaches() {
   const[t,f,p,c]=await Promise.all([
     apiGet('tipo_mercadoria?select=id_tipo,descricao&order=descricao.asc'),
-    apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social&ativo=eq.true&order=razao_social.asc'),
+    apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social,ativo&order=razao_social.asc'),
     apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo&ativo=eq.true&order=nome_mercadoria.asc'),
-    apiGet('clientes?select=*&ativo=eq.true&order=razao_social.asc')
+    apiGet('clientes?select=*&order=razao_social.asc')
   ]);
   if(Array.isArray(t)) cacheTipos=t;
   if(Array.isArray(f)) cacheFornecedores=f;
+  else { cacheFornecedores=[]; console.error('Erro ao carregar fornecedores:',f); }
   if(Array.isArray(p)) cacheProdutos=p;
   if(Array.isArray(c)) cacheClientes=c;
 }

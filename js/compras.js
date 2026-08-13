@@ -1,4 +1,5 @@
 let itensCompraAtual = [];
+let itemCompraEmEdicao = null;
 let chartCompras = null;
 let chartContasPagar = null;
 
@@ -419,16 +420,23 @@ async function renderFormCompra(c) {
   await loadCacheCobrancas();
 
   itensCompraAtual = c?.id_compra ? await carregarItensCompra(c.id_compra) : [];
+  itemCompraEmEdicao = null;
 
   const v = f => c ? (c[f]??'') : '';
   const status = (v('status_compra') || 'PENDENTE').toUpperCase();
   const bloqueado = status === 'LIBERADA' || status === 'CANCELADA';
   const codigo = isNew ? await gerarCodigoCompra() : v('codigo_compra');
-  const fornOpts = cacheFornecedores.map(f=>`<option value="${f.id_fornecedor}" ${String(v('id_fornecedor'))===String(f.id_fornecedor)?'selected':''}>${f.nome_fantasia||f.razao_social}</option>`).join('');
+  const fornOpts = cacheFornecedores.map(f=>{
+    const selecionado=String(v('id_fornecedor'))===String(f.id_fornecedor);
+    const inativo=f.ativo===false;
+    return `<option value="${f.id_fornecedor}" ${selecionado?'selected':''} ${inativo&&!selecionado?'disabled':''}>${f.nome_fantasia||f.razao_social||'Fornecedor #'+f.id_fornecedor}${inativo?' (inativo)':''}</option>`;
+  }).join('');
   const prodOpts = cacheProdutos.map(p=>`<option value="${p.id_produto}" data-custo="${Number(p.preco_custo||0)}" data-venda="${Number(p.preco_venda||0)}" data-estoque="${Number(p.estoque_atual||0)}">${p.nome_mercadoria}</option>`).join('');
   const pagOpts = cacheCobrancas.map(t=>`<option value="${t.descricao}" ${v('meio_pagamento')===t.descricao?'selected':''}>${t.descricao}</option>`).join('');
   const dataCompra = compraDateTimeInput(v('data_compra'));
   const prazo = v('prazo_dias') || 0;
+  const quantidadeParcelas = Math.max(1, Number(v('quantidade_parcelas') || 1));
+  const diasParcelas = Math.max(0, Number(v('dias_vencimento') || 0));
   const vencimento = v('data_vencimento') || compraAddDays(dataCompra.slice(0,10), prazo);
 
   document.getElementById('content-body').innerHTML = `
@@ -452,12 +460,20 @@ async function renderFormCompra(c) {
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Prazo (dias)</label>
+        <label class="form-label">Dias ate o 1o vencimento</label>
         <input class="form-input" type="number" min="0" step="1" id="f-prazo_dias" value="${prazo}" oninput="calcularVencimentoCompra()" ${bloqueado?'disabled':''}/>
       </div>
       <div class="form-group">
-        <label class="form-label">Vencimento</label>
+        <label class="form-label">1o vencimento</label>
         <input class="form-input" type="date" id="f-data_vencimento" value="${vencimento}" ${bloqueado?'disabled':''}/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Parcelas</label>
+        <input class="form-input" type="number" min="1" step="1" id="f-quantidade_parcelas" value="${quantidadeParcelas}" ${bloqueado?'disabled':''}/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Intervalo (se parcelado)</label>
+        <input class="form-input" type="number" min="0" step="1" id="f-dias_vencimento" value="${diasParcelas}" ${bloqueado?'disabled':''}/>
       </div>
       <div class="form-group">
         <label class="form-label">Total da Compra</label>
@@ -488,7 +504,7 @@ async function renderFormCompra(c) {
             <input class="form-input" id="compra-item-subtotal" value="R$ 0,00" readonly style="color:var(--accent);font-weight:700;"/>
           </div>
         </div>
-        <button class="btn btn-primary" style="width:100%;" onclick="adicionarItemCompra()">+ Adicionar Produto</button>
+        <button class="btn btn-primary" id="btn-adicionar-item-compra" style="width:100%;" onclick="adicionarItemCompra()">+ Adicionar Produto</button>
       </div>`:''}
     <div id="lista-itens-compra"></div>
 
@@ -531,8 +547,10 @@ function adicionarItemCompra() {
   if(qtd <= 0){ toast('Quantidade deve ser maior que zero','error'); return; }
   if(preco < 0){ toast('Preço de entrada inválido','error'); return; }
 
-  const existente = itensCompraAtual.find(i=>Number(i.id_produto)===idProduto);
-  if(existente) {
+  const existente = itemCompraEmEdicao===null ? itensCompraAtual.find(i=>Number(i.id_produto)===idProduto) : null;
+  if(itemCompraEmEdicao!==null) {
+    itensCompraAtual[itemCompraEmEdicao]={...itensCompraAtual[itemCompraEmEdicao],id_produto:idProduto,nome_produto:opt?.textContent||`Produto #${idProduto}`,quantidade:qtd,preco_entrada:preco,subtotal:Number((qtd*preco).toFixed(2))};
+  } else if(existente) {
     existente.quantidade += qtd;
     existente.preco_entrada = preco;
     existente.subtotal = Number((existente.quantidade * preco).toFixed(2));
@@ -550,10 +568,28 @@ function adicionarItemCompra() {
   document.getElementById('compra-item-qtd').value = '1';
   document.getElementById('compra-item-preco').value = '';
   calcularSubtotalItemCompra();
+  itemCompraEmEdicao=null;
+  const btnItem=document.getElementById('btn-adicionar-item-compra');
+  if(btnItem)btnItem.textContent='+ Adicionar Produto';
   renderItensCompra();
 }
 
+function editarItemCompra(idx) {
+  const item=itensCompraAtual[idx];
+  if(!item)return;
+  itemCompraEmEdicao=idx;
+  document.getElementById('compra-item-produto').value=String(item.id_produto||'');
+  document.getElementById('compra-item-qtd').value=String(item.quantidade||1);
+  document.getElementById('compra-item-preco').value=Number(item.preco_entrada||0).toFixed(2);
+  calcularSubtotalItemCompra();
+  const btn=document.getElementById('btn-adicionar-item-compra');
+  if(btn)btn.textContent='✓ Salvar alteração do item';
+  document.getElementById('compra-item-produto')?.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
 function removerItemCompra(idx) {
+  if(itemCompraEmEdicao===idx)itemCompraEmEdicao=null;
+  else if(itemCompraEmEdicao!==null&&itemCompraEmEdicao>idx)itemCompraEmEdicao--;
   itensCompraAtual.splice(idx,1);
   renderItensCompra();
 }
@@ -589,7 +625,7 @@ function renderItensCompra(status='PENDENTE') {
             <td style="padding:8px;text-align:right;font-family:var(--mono);color:var(--accent);font-weight:700;">${compraFmt(i.subtotal)}</td>
             <td style="padding:8px;text-align:right;">${bloqueado
               ? `${Number(i.estoque_anterior||0).toFixed(2)} -> ${Number(i.estoque_atual||0).toFixed(2)}`
-              : `<button class="btn btn-danger" style="padding:4px 8px;font-size:11px;" onclick="removerItemCompra(${idx})">Remover</button>`}</td>
+              : `<button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="editarItemCompra(${idx})">Alterar</button> <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;" onclick="removerItemCompra(${idx})">Excluir</button>`}</td>
           </tr>`).join('')}</tbody>
         <tfoot><tr style="border-top:2px solid var(--border);background:var(--surface2);">
           <td colspan="3" style="padding:8px;font-weight:700;">Total</td>
@@ -615,6 +651,8 @@ function getCompraPayload() {
     valor_total: Number(totalCompraAtual().toFixed(2)),
     meio_pagamento: document.getElementById('f-meio_pagamento').value || null,
     prazo_dias: Math.max(0, parseInt(document.getElementById('f-prazo_dias').value||'0',10)||0),
+    quantidade_parcelas: Math.max(1, parseInt(document.getElementById('f-quantidade_parcelas').value||'1',10)||1),
+    dias_vencimento: Math.max(0, parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0),
     data_vencimento: document.getElementById('f-data_vencimento').value || null,
     observacoes: document.getElementById('f-observacoes').value.trim() || null,
     id_produto: itensCompraAtual[0]?.id_produto || null,
@@ -645,6 +683,7 @@ async function saveCompra() {
   if(!data.id_fornecedor){ toast('Selecione o fornecedor','error'); return; }
   if(!document.getElementById('f-data_compra')?.value){ toast('Informe a data','error'); return; }
   if(!itensCompraAtual.length){ toast('Adicione pelo menos um produto','error'); return; }
+  if(data.quantidade_parcelas>1&&data.dias_vencimento===0){ toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error'); return; }
 
   const btn = document.getElementById('btn-save');
   if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
@@ -677,12 +716,29 @@ async function saveCompra() {
 }
 
 async function abrirLiberacaoCompra(idCompra) {
+  // A liberacao precisa usar exatamente o que esta na tela. Antes, os itens eram
+  // recarregados do banco e uma alteracao ainda nao salva era silenciosamente perdida.
+  if(itemCompraEmEdicao!==null){
+    toast('Conclua a alteração do item clicando em "Salvar alteração do item" antes de liberar.','error');
+    return;
+  }
+  const dadosAtuais=getCompraPayload();
+  if(!dadosAtuais.id_fornecedor){toast('Selecione o fornecedor.','error');return;}
+  if(!itensCompraAtual.length){toast('Adicione produtos antes de liberar.','error');return;}
+  if(dadosAtuais.quantidade_parcelas>1&&dadosAtuais.dias_vencimento===0){toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error');return;}
+  const compraSalva=await apiPatch(`compras?id_compra=eq.${idCompra}`,dadosAtuais);
+  if(!compraSalva.ok){toast('Erro ao salvar as alterações antes da liberação: '+(compraSalva.data?.message||'erro'),'error');return;}
+  const itensSalvos=await salvarItensCompra(idCompra);
+  if(!itensSalvos.ok){toast('Erro ao salvar os itens antes da liberação: '+(itensSalvos.data?.message||'erro'),'error');return;}
+  await loadItems();
   await loadCaches();
   const compra = items.find(x=>Number(x.id_compra)===Number(idCompra));
   if(!compra){ toast('Compra não encontrada.','error'); return; }
   itensCompraAtual = await carregarItensCompra(idCompra);
   if(!itensCompraAtual.length){ toast('Adicione produtos antes de liberar.','error'); return; }
   const venc = compra.data_vencimento || compraAddDays((compra.data_compra||'').slice(0,10), compra.prazo_dias||0);
+  const parcelas = Math.max(1, Number(compra.quantidade_parcelas || 1));
+  const intervalo = Math.max(0, Number(compra.dias_vencimento || 0));
   document.body.insertAdjacentHTML('beforeend',`
     <div class="modal-overlay" id="compra-liberar-modal" style="display:flex;">
       <div class="modal" style="max-width:760px;">
@@ -693,8 +749,10 @@ async function abrirLiberacaoCompra(idCompra) {
         <div class="modal-body">
           <div class="search-banner">Revise custo e preço de venda por produto. Ao liberar, todos os estoques serão somados e uma conta a pagar será gerada.</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:12px;">
-            <div class="form-group"><label class="form-label">Vencimento</label><input class="form-input" type="date" id="lib-vencimento" value="${venc}"/></div>
+            <div class="form-group"><label class="form-label">1o vencimento</label><input class="form-input" type="date" id="lib-vencimento" value="${venc}"/></div>
             <div class="form-group"><label class="form-label">Meio</label><input class="form-input" id="lib-meio" value="${compra.meio_pagamento||''}" placeholder="Ex: PIX, BOLETO..."/></div>
+            <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="lib-parcelas" value="${parcelas}"/></div>
+            <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="lib-dias" value="${intervalo}"/></div>
           </div>
           <div style="overflow:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px;">
@@ -734,6 +792,13 @@ async function confirmarLiberacaoCompra(idCompra) {
 
   const btn = document.getElementById('btn-confirmar-liberacao');
   if(btn){ btn.disabled = true; btn.textContent = 'Liberando...'; }
+  const parcelas = Math.max(1, parseInt(document.getElementById('lib-parcelas')?.value||'1',10)||1);
+  const intervalo = Math.max(0, parseInt(document.getElementById('lib-dias')?.value||'0',10)||0);
+  if(Number(compra.valor_total||0) < parcelas/100) {
+    toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');
+    if(btn){ btn.disabled=false; btn.textContent='Liberar'; }
+    return;
+  }
   const backups = [];
 
   for(const item of itens) {
@@ -797,7 +862,9 @@ async function confirmarLiberacaoCompra(idCompra) {
   const compraRes = await apiPatch(`compras?id_compra=eq.${idCompra}`,{
     status_compra:'LIBERADA',
     data_vencimento: vencimento,
-    meio_pagamento: meio
+    meio_pagamento: meio,
+    quantidade_parcelas: parcelas,
+    dias_vencimento: intervalo
   });
   if(!compraRes.ok) {
     for(const b of backups) await apiPatch(`produtos?id_produto=eq.${b.id_produto}`,{estoque_atual:b.estoque_anterior});
@@ -806,15 +873,23 @@ async function confirmarLiberacaoCompra(idCompra) {
   }
 
   await apiDelete(`contas_pagar?id_compra=eq.${idCompra}`);
-  const contaRes = await apiPost('contas_pagar',{
+  const valorTotal = Number(compra.valor_total || 0);
+  const valorBase = Math.floor((valorTotal / parcelas) * 100) / 100;
+  const grupoParcelamento = novoGrupoParcelamento();
+  const contasData = Array.from({length:parcelas},(_,idx)=>({
     id_compra: idCompra,
     id_fornecedor: compra.id_fornecedor,
-    data_vencimento: vencimento,
-    valor_original: compra.valor_total,
+    data_vencimento: compraAddDays(vencimento, idx * intervalo),
+    valor_original: idx===parcelas-1 ? Number((valorTotal-(valorBase*(parcelas-1))).toFixed(2)) : valorBase,
     meio_pagamento: meio,
     status_pagamento: 'PENDENTE',
-    observacoes: `Compra ${compra.codigo_compra||'#'+idCompra}`
-  });
+    grupo_parcelamento: grupoParcelamento,
+    numero_parcela: idx+1,
+    total_parcelas: parcelas,
+    valor_total_titulo: valorTotal,
+    observacoes: [parcelas>1?`Parcela ${idx+1}/${parcelas}`:'',`Compra ${compra.codigo_compra||'#'+idCompra}`].filter(Boolean).join(' - ')
+  }));
+  const contaRes = await apiPost('contas_pagar',contasData);
   if(!contaRes.ok) {
     for(const b of backups) await apiPatch(`produtos?id_produto=eq.${b.id_produto}`,{estoque_atual:b.estoque_anterior});
     await apiPatch(`compras?id_compra=eq.${idCompra}`,{status_compra:'PENDENTE'});
@@ -889,42 +964,119 @@ async function excluirCompra(idCompra) {
 }
 
 async function renderFormContaPagar(c) {
-  await loadCaches();
+  await Promise.all([loadCaches(), loadCacheCobrancas()]);
   const v = f => c ? (c[f]??'') : '';
-  const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c?.id_fornecedor));
+  const fornOpts = cacheFornecedores.map(f=>{
+    const selecionado=String(v('id_fornecedor'))===String(f.id_fornecedor);
+    const inativo=f.ativo===false;
+    return `<option value="${f.id_fornecedor}" ${selecionado?'selected':''} ${inativo&&!selecionado?'disabled':''}>${f.nome_fantasia||f.razao_social||'Fornecedor #'+f.id_fornecedor}${inativo?' (inativo)':''}</option>`;
+  }).join('');
+  const pagOpts = cacheCobrancas.map(t=>`<option value="${t.descricao}" ${v('meio_pagamento')===t.descricao?'selected':''}>${t.descricao}</option>`).join('');
   const statusOpts = ['PENDENTE','PAGO','CANCELADO'].map(s=>`<option value="${s}" ${v('status_pagamento')===s?'selected':''}>${s}</option>`).join('');
+  const vencimentoManual = v('data_vencimento') || compraDateInput(new Date());
+  const origemCompra=!!c?.id_compra;
   document.getElementById('content-body').innerHTML = `
-    <div class="section-label"><span>Conta a Pagar</span></div>
+    <div class="section-label"><span>Conta a Pagar · Parcela ${rotuloParcela(c)} · Total ${contasFmtMoeda(valorTotalParcelas(c,'pagar'))}</span></div>
     <div class="form-grid">
-      <div class="form-group full"><label class="form-label">Fornecedor</label><input class="form-input" value="${forn?.nome_fantasia||forn?.razao_social||''}" readonly/></div>
+      <div class="form-group full"><label class="form-label">Fornecedor *</label><select class="form-input form-select" id="f-id_fornecedor" ${origemCompra?'disabled':''}><option value="">${cacheFornecedores.length?'Selecione o fornecedor...':'Nenhum fornecedor cadastrado nesta empresa — use o botão +'}</option>${fornOpts}</select></div>
       <div class="form-group"><label class="form-label">Status</label><select class="form-input form-select" id="f-status_pagamento">${statusOpts}</select></div>
-      <div class="form-group"><label class="form-label">Valor Original</label><input class="form-input" type="number" step="0.01" id="f-valor_original" value="${v('valor_original')}"/></div>
-      <div class="form-group"><label class="form-label">Valor Pago</label><input class="form-input" type="number" step="0.01" id="f-valor_pago" value="${v('valor_pago')}"/></div>
-      <div class="form-group"><label class="form-label">Meio de Pagamento</label><input class="form-input" id="f-meio_pagamento" value="${v('meio_pagamento')}"/></div>
-      <div class="form-group"><label class="form-label">Vencimento</label><input class="form-input" type="date" id="f-data_vencimento" value="${v('data_vencimento')}"/></div>
+      <div class="form-group"><label class="form-label">Valor Original</label><input class="form-input" type="text" inputmode="decimal" id="f-valor_original" value="${v('valor_original')}" placeholder="0,00" ${origemCompra?'readonly':''}/></div>
+      <div class="form-group"><label class="form-label">Valor Pago</label><input class="form-input" type="text" inputmode="decimal" id="f-valor_pago" value="${v('valor_pago')}" ${isNew?'readonly':''}/></div>
+      <div class="form-group"><label class="form-label">Meio de Pagamento</label><select class="form-input form-select" id="f-meio_pagamento"><option value="">Selecione...</option>${pagOpts}</select></div>
+      <div class="form-group"><label class="form-label">1o vencimento</label><input class="form-input" type="date" id="f-data_vencimento" value="${vencimentoManual}"/></div>
       <div class="form-group"><label class="form-label">Data de Pagamento</label><input class="form-input" type="datetime-local" id="f-data_pagamento" value="${v('data_pagamento')?String(v('data_pagamento')).slice(0,16):''}"/></div>
     </div>
+    ${isNew ? `<div class="section-label"><span>Condição do lançamento</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="f-novas-parcelas" value="1"/></div>
+      <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="f-novas-dias" value="0"/></div>
+    </div>` : ''}
+    ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="2"/></div>
+      <div class="form-group"><label class="form-label">Dias entre parcelas</label><input class="form-input" type="number" min="0" step="1" id="f-reparcelar-dias" value="0"/></div>
+    </div>` : ''}
     <div class="section-label"><span>Observações</span></div>
     <div class="form-group"><textarea class="form-textarea" id="f-observacoes">${v('observacoes')}</textarea></div>
     <div class="form-actions">
-      <button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>
-      ${c?.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">Pago</span>'}
+      ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
+      ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
+      ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
+      ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<button class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>') : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Voltar</button>
     </div>`;
+}
+
+async function excluirContaPagar() {
+  const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
+  if(!conta)return;
+  if(conta.id_compra){toast('Este título veio de uma compra. Exclua a compra para remover seus títulos.','error');return;}
+  const grupo=grupoParcelasTitulo(conta,'pagar');
+  if(!grupo.length){toast('Parcelas não encontradas.','error');return;}
+  if(grupo.some(x=>Number(x.valor_pago||0)>0||x.status_pagamento==='PAGO')){toast('Não é possível excluir: uma ou mais parcelas já possuem pagamento.','error');return;}
+  if(!confirm(`Excluir todas as ${grupo.length} parcelas deste lançamento?`))return;
+  const ids=grupo.map(x=>Number(x.id_conta_pagar)).filter(Boolean);
+  const ok=await apiDelete(`contas_pagar?id_conta_pagar=in.(${ids.join(',')})`);
+  if(ok){toast('Todas as parcelas foram excluídas.','success');await loadItems();await cancelForm();}
+  else toast('Erro ao excluir as parcelas.','error');
+}
+
+async function parcelarContaPagar() {
+  const conta = items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
+  if(!conta || conta.status_pagamento==='PAGO' || Number(conta.valor_pago||0)>0){ toast('Somente contas sem pagamentos podem ser parceladas.','error'); return; }
+  const qtd=Math.max(2,parseInt(document.getElementById('f-reparcelar-quantidade')?.value||'2',10)||2);
+  const dias=Math.max(0,parseInt(document.getElementById('f-reparcelar-dias')?.value||'0',10)||0);
+  if(dias===0){toast('Informe um intervalo em dias maior que zero para parcelar.','error');return;}
+  if(!confirm(`Dividir esta conta em ${qtd} parcelas?`)) return;
+  const total=Number(document.getElementById('f-valor_original')?.value||conta.valor_original||0);
+  if(total < qtd/100){toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');return;}
+  const base=Math.floor((total/qtd)*100)/100;
+  const venc=document.getElementById('f-data_vencimento')?.value||conta.data_vencimento;
+  const obsBase=(document.getElementById('f-observacoes')?.value||conta.observacoes||'').replace(/^Parcela \d+\/\d+\s*-\s*/,'');
+  const grupo=conta.grupo_parcelamento||novoGrupoParcelamento();
+  const comum={id_compra:conta.id_compra||null,id_fornecedor:Number(document.getElementById('f-id_fornecedor')?.value||conta.id_fornecedor)||null,meio_pagamento:document.getElementById('f-meio_pagamento')?.value||null,status_pagamento:'PENDENTE',grupo_parcelamento:grupo,total_parcelas:qtd,valor_total_titulo:total};
+  const dados=Array.from({length:qtd},(_,idx)=>({...comum,numero_parcela:idx+1,data_vencimento:compraAddDays(venc,idx*dias),valor_original:idx===qtd-1?Number((total-base*(qtd-1)).toFixed(2)):base,valor_pago:null,data_pagamento:null,observacoes:obsBase||null}));
+  const original=dados.shift();
+  const atualizada=await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,original);
+  if(!atualizada.ok){toast('Erro ao atualizar a primeira parcela.','error');return;}
+  const criadas=await apiPost('contas_pagar',dados);
+  if(!criadas.ok){toast('Primeira parcela salva, mas houve erro ao criar as demais.','error');return;}
+  toast(`${qtd} parcelas geradas!`,'success'); await loadItems(); openItem(currentId);
 }
 
 async function saveContaPagar() {
   const status = document.getElementById('f-status_pagamento').value;
   const dataPagamento = document.getElementById('f-data_pagamento').value;
   const data = {
+    id_fornecedor: Number(document.getElementById('f-id_fornecedor').value)||null,
     status_pagamento: status,
-    valor_original: Number(document.getElementById('f-valor_original').value||0),
-    valor_pago: Number(document.getElementById('f-valor_pago').value||0)||null,
+    valor_original: contasNumeroInput(document.getElementById('f-valor_original').value),
+    valor_pago: isNew?null:(contasNumeroInput(document.getElementById('f-valor_pago').value)||null),
     meio_pagamento: document.getElementById('f-meio_pagamento').value||null,
     data_vencimento: document.getElementById('f-data_vencimento').value||null,
     data_pagamento: dataPagamento ? new Date(dataPagamento).toISOString() : (status==='PAGO'?new Date().toISOString():null),
     observacoes: document.getElementById('f-observacoes').value.trim()||null
   };
+  if(!data.id_fornecedor){toast('Selecione o fornecedor.','error');return;}
+  if(data.valor_original<=0){toast('Informe um valor maior que zero.','error');return;}
+  if(!data.data_vencimento){toast('Informe o primeiro vencimento.','error');return;}
+  if(isNew) {
+    const qtd=Math.max(1,parseInt(document.getElementById('f-novas-parcelas')?.value||'1',10)||1);
+    const dias=Math.max(0,parseInt(document.getElementById('f-novas-dias')?.value||'0',10)||0);
+    if(qtd>1&&dias===0){toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error');return;}
+    if(data.valor_original<qtd/100){toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');return;}
+    const total=data.valor_original, base=Math.floor((total/qtd)*100)/100;
+    const grupo=novoGrupoParcelamento();
+    const registros=Array.from({length:qtd},(_,idx)=>{
+      const valor=idx===qtd-1?Number((total-base*(qtd-1)).toFixed(2)):base;
+      return {...data,id_compra:null,grupo_parcelamento:grupo,numero_parcela:idx+1,total_parcelas:qtd,valor_total_titulo:total,data_vencimento:compraAddDays(data.data_vencimento,idx*dias),valor_original:valor,valor_pago:data.status_pagamento==='PAGO'?valor:null,observacoes:data.observacoes};
+    });
+    const criado=await apiPost('contas_pagar',registros.map(({data_pagamento,...registro})=>registro));
+    if(criado.ok){toast(qtd>1?`${qtd} contas a pagar criadas!`:'Conta a pagar criada!','success');await loadItems();const primeira=Array.isArray(criado.data)?criado.data[0]:criado.data;if(primeira)openItem(primeira.id_conta_pagar);}
+    else toast('Erro ao criar conta: '+([criado.data?.message,criado.data?.details,criado.data?.hint].filter(Boolean).join(' - ')||'erro'),'error');
+    return;
+  }
+  if(items.find(x=>Number(x.id_conta_pagar)===Number(currentId))?.id_compra){toast('O valor deste título vem da compra. Altere a compra de origem.','error');return;}
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,data);
   if(!res.ok){ toast('Erro ao salvar conta: '+(res.data?.message||'erro'),'error'); return; }
   toast('Conta atualizada.','success');
@@ -944,4 +1096,13 @@ async function marcarContaPagarPaga() {
   toast('Pagamento confirmado.','success');
   await loadItems();
   openItem(currentId);
+}
+
+async function reativarContaPagar() {
+  const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
+  if(!conta)return toast('Conta não encontrada.','error');
+  if(!confirm('Reativar esta baixa? O valor pago e a data de pagamento serão removidos.'))return;
+  const res=await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{status_pagamento:'PENDENTE',valor_pago:null,data_pagamento:null});
+  if(!res.ok){toast('Erro ao reativar a baixa: '+(res.data?.message||'erro'),'error');return;}
+  toast('Baixa reativada.','success');await loadItems();openItem(currentId);
 }
