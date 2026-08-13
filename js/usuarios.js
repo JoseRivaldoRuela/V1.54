@@ -5,6 +5,7 @@ function renderFormUsuario(c) {
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Nome *</label><input class="form-input" id="f-nome" value="${v('nome')}" placeholder="Nome completo"/></div>
       <div class="form-group"><label class="form-label">Username *</label><input class="form-input" id="f-username" value="${v('username')}" placeholder="Nome de usuário"/></div>
+      <div class="form-group"><label class="form-label">E-mail</label><input class="form-input" type="email" id="f-email-usuario" value="${v('email')}" placeholder="usuario@empresa.com"/></div>
       <div class="form-group"><label class="form-label">${c?'Nova Senha (vazio = manter)':'Senha *'}</label><input class="form-input" type="password" id="f-senha" placeholder="${c?'Nova senha...':'Digite a senha'}"/></div>
       <div class="form-group"><label class="form-label">Confirmar Senha</label><input class="form-input" type="password" id="f-senha2" placeholder="Confirme a senha"/></div>
     </div>
@@ -26,17 +27,19 @@ function renderFormUsuario(c) {
 async function saveUsuario() {
   const nome=document.getElementById('f-nome').value.trim();
   const username=document.getElementById('f-username').value.trim();
+  const email=document.getElementById('f-email-usuario').value.trim().toLowerCase();
   const senha=document.getElementById('f-senha').value;
   const senha2=document.getElementById('f-senha2').value;
   const admin=document.getElementById('f-admin').checked;
   const ativo=document.getElementById('f-ativo').checked;
   if(!nome||!username){toast('Nome e username obrigatórios','error');return;}
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){toast('Informe um e-mail valido.','error');return;}
   if(senha&&senha!==senha2){toast('Senhas não coincidem','error');return;}
   if(isNew&&!senha){toast('Senha obrigatória','error');return;}
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
   try {
     if(isNew){
-      const r=await fetch(`${SUPA_URL}/rest/v1/rpc/app_criar_usuario?apikey=${ANON_KEY}`,{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:JSON.stringify({p_nome:nome,p_username:username,p_senha:senha,p_ativo:ativo,p_admin:admin})});
+      const r=await fetch(`${SUPA_URL}/rest/v1/rpc/app_criar_usuario?apikey=${ANON_KEY}`,{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:JSON.stringify({p_nome:nome,p_username:username,p_senha:senha,p_ativo:ativo,p_admin:admin,p_email:email||null})});
       const res=await r.json();
       if(r.ok&&res?.ok!==false){
         toast('Usuário cadastrado!','success');
@@ -55,7 +58,7 @@ async function saveUsuario() {
           body:JSON.stringify({p_id:currentId,p_senha:senha})
         });
       }
-      const{ok,data:res}=await apiPatch(`usuarios?id_usuario=eq.${currentId}`,{nome,username,admin,ativo});
+      const{ok,data:res}=await apiPatch(`usuarios?id_usuario=eq.${currentId}`,{nome,username,email:email||null,admin,ativo});
       if(ok){
         toast('Usuário atualizado!','success');
         await loadItems();
