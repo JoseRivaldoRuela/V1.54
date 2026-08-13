@@ -31,6 +31,7 @@ const tabConfig = {
 tabConfig.empresas = { table:'empresas', id:'id_empresa', label:'Empresa', plural:'Empresas', order:'nome', searchFields:['nome','codigo'], hasCNPJ:false, hasAtivo:true };
 
 tabConfig.importador_tickets = { table:'vendas', id:'id_venda', label:'Importar Tickets', plural:'Importador de Tickets', order:'id_venda', searchFields:['codigo_venda'], hasCNPJ:false, hasAtivo:false };
+tabConfig.ajuda = { table:'chamados_suporte', id:'id_chamado', label:'Chamado', plural:'Central de Ajuda', order:'criado_em', searchFields:['assunto','descricao','modulo','status'], hasCNPJ:false, hasAtivo:false };
 
 let dashPeriodo = '7'; // dias
 let dashMesOffset = 0; // 0 = mes atual, -1 = mes anterior

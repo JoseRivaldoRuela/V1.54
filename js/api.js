@@ -4,7 +4,7 @@ const ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 // API
 const TABELAS_COM_ESCOPO_EMPRESA=new Set([
   'clientes','fornecedores','tipo_mercadoria','produtos','produtos_precos_especiais','tipo_cobranca',
-  'vendas','venda_itens','contas_receber','contas_receber_baixas','compras','compra_itens','contas_pagar','estoque_movimentacoes'
+  'vendas','venda_itens','contas_receber','contas_receber_baixas','compras','compra_itens','contas_pagar','estoque_movimentacoes','chamados_suporte'
 ]);
 function caminhoComEscopoEmpresa(p){
   const tabela=String(p||'').split('?')[0];

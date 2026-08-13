@@ -21,7 +21,7 @@ document.addEventListener('click', e => {
 
 function setActiveMenu(tab) {
   document.querySelectorAll('.menu-btn,.dropdown-item').forEach(el=>el.classList.remove('active'));
-  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', empresas:'config', importador_tickets:'config' };
+  const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', empresas:'config', importador_tickets:'config', ajuda:'ajuda' };
   const produtosTabs = ['tipo_mercadoria','produtos_tab','precos_especiais','estoque_movimentacoes','kardex'];
   const main = menuMap[tab];
   if(main) document.getElementById('mbtn-'+main)?.classList.add('active');
@@ -36,16 +36,21 @@ async function switchTab(tab) {
   if(tab==='empresas' && !isSuperAdminJr){ toast('Acesso exclusivo ao administrador da empresa JR.','error'); return; }
   currentTab=tab; currentId=null; isNew=false;
   const cfg=tabConfig[tab];
+  document.getElementById('search-input').oninput = tab==='ajuda' ? filtrarAjuda : filterItems;
+  document.getElementById('search-input').placeholder = tab==='ajuda' ? 'Buscar no help...' : 'Buscar...';
   document.getElementById('topbar-title').textContent=cfg.plural;
   document.getElementById('btn-novo').textContent='+ '+cfg.label;
-  document.getElementById('btn-novo').style.display=tab==='importador_tickets'?'none':'block';
+  document.getElementById('btn-novo').style.display=(tab==='importador_tickets'||tab==='ajuda')?'none':'block';
   document.getElementById('btn-cnpj').style.display=cfg.hasCNPJ?'block':'none';
   document.getElementById('search-input').value='';
   document.getElementById('content-header').style.display='none';
   if(tab==='contas_receber') {
     contasReceberClienteFiltro = null;
   }
-  if(tab==='empresas') {
+  if(tab==='ajuda') {
+    setActiveMenu(tab);
+    await renderCentralAjuda();
+  } else if(tab==='empresas') {
     setActiveMenu(tab);
     await renderEmpresasAdmin();
   } else if(tab==='vendas') {
