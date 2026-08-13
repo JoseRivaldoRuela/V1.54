@@ -37,5 +37,16 @@ declare coluna_senha text; novo_id bigint; begin
   return jsonb_build_object('ok',true,'id_usuario',novo_id);
 end $$;
 grant execute on function public.app_criar_usuario(text,text,text,boolean,boolean,text) to anon,authenticated;
+create or replace function public.atualizar_meu_email(p_email text) returns jsonb
+language plpgsql security definer set search_path=public,extensions as $$
+declare email_normalizado text:=lower(trim(coalesce(p_email,'')));
+begin
+  if public.app_usuario_atual() is null then raise exception 'Sessao invalida'; end if;
+  if email_normalizado!~'^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then return jsonb_build_object('ok',false,'message','E-mail invalido'); end if;
+  update public.usuarios set email=email_normalizado where id_usuario=public.app_usuario_atual() and empresa_id=public.app_empresa_atual();
+  return jsonb_build_object('ok',true,'email',email_normalizado);
+end $$;
+revoke all on function public.atualizar_meu_email(text) from public;
+grant execute on function public.atualizar_meu_email(text) to anon,authenticated;
 commit;
 select u.nome,u.email from public.usuarios u join public.empresas e on e.id_empresa=u.empresa_id where lower(e.codigo)='jr' and u.admin and u.ativo and nullif(trim(u.email),'') is not null;

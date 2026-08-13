@@ -97,10 +97,14 @@ async function abrirAreaChamados(modulo=ajudaModuloAtual){
   document.getElementById('content-body').innerHTML='<div class="loading" style="justify-content:center;padding:40px;"><div class="spinner"></div> Carregando chamados...</div>';
   const chamados=await apiGet('chamados_suporte?select=*&order=criado_em.desc');
   const lista=Array.isArray(chamados)?chamados:[];
+  const uid=usuario?.id||usuario?.id_usuario;
+  const perfil=uid?await apiGet(`usuarios?select=email&id_usuario=eq.${uid}&limit=1`):[];
+  const emailAtual=Array.isArray(perfil)?String(perfil[0]?.email||''):'';
   document.getElementById('content-body').innerHTML=`<div style="max-width:960px;margin:auto;"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;"><div><h2 style="margin:0 0 5px;">Atendimento</h2><div style="color:var(--text2);font-size:13px;">Registre o problema com detalhes para facilitar a analise.</div></div><button class="btn btn-secondary" onclick="renderConteudoAjuda()">Voltar ao help</button></div>
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;"><div class="form-grid">
     <div class="form-group"><label class="form-label">Modulo *</label><select class="form-input form-select" id="ch-modulo">${AJUDA_MODULOS.map(m=>`<option value="${m.id}" ${m.id===ajudaModuloAtual?'selected':''}>${m.titulo}</option>`).join('')}</select></div>
     <div class="form-group"><label class="form-label">Prioridade *</label><select class="form-input form-select" id="ch-prioridade"><option>BAIXA</option><option selected>NORMAL</option><option>ALTA</option><option>URGENTE</option></select></div>
+    ${!emailAtual?'<div class="form-group full" style="padding:12px;border:1px solid rgba(255,165,0,.35);border-radius:8px;background:rgba(255,165,0,.08);"><label class="form-label">Seu e-mail para retorno *</label><input class="form-input" type="email" id="ch-email-usuario" placeholder="voce@empresa.com"/><div style="font-size:11px;color:var(--text2);margin-top:5px;">O e-mail sera salvo automaticamente no seu cadastro.</div></div>':''}
     <div class="form-group full"><label class="form-label">Assunto *</label><input class="form-input" id="ch-assunto" maxlength="120" placeholder="Ex.: quantidade incorreta ao liberar compra"/></div>
     <div class="form-group full"><label class="form-label">Descricao detalhada *</label><textarea class="form-textarea" id="ch-descricao" maxlength="3000" placeholder="Informe o que tentou fazer, resultado esperado, resultado apresentado, numero do documento e mensagem de erro."></textarea></div>
   </div><div class="form-actions"><button class="btn btn-primary" id="btn-chamado" onclick="salvarChamado()">Registrar chamado</button></div></div>
@@ -113,6 +117,13 @@ async function salvarChamado(){
   if(assunto.length<5){toast('Informe um assunto objetivo.','error');return;}
   if(descricao.length<20){toast('Descreva o problema com pelo menos 20 caracteres.','error');return;}
   const btn=document.getElementById('btn-chamado');btn.disabled=true;btn.textContent='Registrando...';
+  const campoEmail=document.getElementById('ch-email-usuario');
+  if(campoEmail){
+    const email=campoEmail.value.trim().toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){toast('Informe um e-mail valido para receber o retorno.','error');btn.disabled=false;btn.textContent='Registrar chamado';return;}
+    const perfilRes=await apiPost('rpc/atualizar_meu_email',{p_email:email});
+    if(!perfilRes.ok||perfilRes.data?.ok===false){toast('Nao foi possivel salvar seu e-mail: '+(perfilRes.data?.message||'erro'),'error');btn.disabled=false;btn.textContent='Registrar chamado';return;}
+  }
   const res=await apiPost('chamados_suporte',{modulo:document.getElementById('ch-modulo').value,prioridade:document.getElementById('ch-prioridade').value,assunto,descricao,status:'ABERTO'});
   if(!res.ok){toast('Nao foi possivel registrar: '+(res.data?.message||'execute sql/chamados_suporte.sql no Supabase'),'error');btn.disabled=false;btn.textContent='Registrar chamado';return;}
   const chamado=Array.isArray(res.data)?res.data[0]:res.data;
