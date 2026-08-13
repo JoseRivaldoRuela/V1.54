@@ -31,7 +31,7 @@ async function loadCaches() {
   const[t,f,p,c]=await Promise.all([
     apiGet('tipo_mercadoria?select=id_tipo,descricao&order=descricao.asc'),
     apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social,ativo&order=razao_social.asc'),
-    apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo&ativo=eq.true&order=nome_mercadoria.asc'),
+    apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo,id_tipo,tipo_mercadoria(descricao)&ativo=eq.true&order=nome_mercadoria.asc'),
     apiGet('clientes?select=*&order=razao_social.asc')
   ]);
   if(Array.isArray(t)) cacheTipos=t;
@@ -39,6 +39,56 @@ async function loadCaches() {
   else { cacheFornecedores=[]; console.error('Erro ao carregar fornecedores:',f); }
   if(Array.isArray(p)) cacheProdutos=p;
   if(Array.isArray(c)) cacheClientes=c;
+}
+
+function categoriaProdutoPedido(produto) {
+  const id = produto?.id_tipo ?? '';
+  const tipoCache = cacheTipos.find(t => String(t.id_tipo) === String(id));
+  return {
+    id: id === null || id === undefined ? '' : String(id),
+    nome: produto?.tipo_mercadoria?.descricao || tipoCache?.descricao || 'Sem categoria'
+  };
+}
+
+function abasCategoriasProdutosPedido(contexto) {
+  const categorias = [];
+  const vistos = new Set();
+  cacheProdutos.forEach(produto => {
+    const categoria = categoriaProdutoPedido(produto);
+    if(vistos.has(categoria.id)) return;
+    vistos.add(categoria.id);
+    categorias.push(categoria);
+  });
+  categorias.sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  return `<div class="produto-categoria-tabs" id="${contexto}-produto-categorias">
+    <button type="button" class="produto-categoria-tab active" data-categoria="todos" onclick="filtrarProdutosPedido('${contexto}','todos')">Todos</button>
+    ${categorias.map(c=>`<button type="button" class="produto-categoria-tab" data-categoria="${c.id}" onclick="filtrarProdutosPedido('${contexto}','${c.id}')">${c.nome}</button>`).join('')}
+  </div>`;
+}
+
+function filtrarProdutosPedido(contexto, categoria='todos', produtoSelecionado='') {
+  const venda = contexto === 'venda';
+  const select = document.getElementById(venda ? 'item-produto' : 'compra-item-produto');
+  if(!select) return;
+  const selecionado = String(produtoSelecionado || select.value || '');
+  const produtos = categoria === 'todos'
+    ? cacheProdutos
+    : cacheProdutos.filter(p => categoriaProdutoPedido(p).id === String(categoria));
+  select.innerHTML = `<option value="">Selecione o produto...</option>${produtos.map(p => venda
+    ? `<option value="${p.id_produto}" data-preco="${Number(p.preco_venda||0)}">${produtoVendaOptionLabel(p)}</option>`
+    : `<option value="${p.id_produto}" data-custo="${Number(p.preco_custo||0)}" data-venda="${Number(p.preco_venda||0)}" data-estoque="${Number(p.estoque_atual||0)}">${p.nome_mercadoria}</option>`
+  ).join('')}`;
+  if(produtos.some(p => String(p.id_produto) === selecionado)) select.value = selecionado;
+  document.querySelectorAll(`#${contexto}-produto-categorias .produto-categoria-tab`).forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.categoria === String(categoria));
+  });
+  if(venda) atualizarInfoProdutoVenda();
+}
+
+function selecionarProdutoPedido(contexto, idProduto) {
+  const produto = cacheProdutos.find(p => String(p.id_produto) === String(idProduto));
+  const categoria = produto ? categoriaProdutoPedido(produto).id : 'todos';
+  filtrarProdutosPedido(contexto, categoria, idProduto);
 }
 
 function buildSelect(id,opts,vf,lf,sel,ph='Selecione...'){
