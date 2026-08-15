@@ -30,7 +30,7 @@ async function saveTipo() {
 async function loadCaches() {
   const[t,f,p,c]=await Promise.all([
     apiGet('tipo_mercadoria?select=id_tipo,descricao&order=descricao.asc'),
-    apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social,ativo&order=razao_social.asc'),
+    apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social,cpf_cnpj,ativo&order=razao_social.asc'),
     apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo,id_tipo,tipo_mercadoria(descricao)&ativo=eq.true&order=nome_mercadoria.asc'),
     apiGet('clientes?select=*&order=razao_social.asc')
   ]);

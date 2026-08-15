@@ -19,6 +19,25 @@ document.addEventListener('click', e => {
   if(!e.target.closest('.menu-group')) closeMenus(); 
 });
 
+function marcarFormularioAlterado(e) {
+  if(!e.isTrusted||(!isNew&&currentId===null))return;
+  if(e.target.closest('#content-body')&&e.target.matches('input,select,textarea'))formularioAlterado=true;
+}
+document.addEventListener('input',marcarFormularioAlterado);
+document.addEventListener('change',marcarFormularioAlterado);
+window.addEventListener('beforeunload',e=>{
+  if(!formularioAlterado)return;
+  e.preventDefault();
+  e.returnValue='';
+});
+
+function podeSairDoFormulario() {
+  if(!formularioAlterado)return true;
+  if(!confirm('Existem alterações não salvas neste cadastro. Deseja sair e descartá-las?'))return false;
+  formularioAlterado=false;
+  return true;
+}
+
 function setActiveMenu(tab) {
   document.querySelectorAll('.menu-btn,.dropdown-item').forEach(el=>el.classList.remove('active'));
   const menuMap = { vendas:'vendas', compras:'compras', contas_receber:'contas', contas_pagar:'contas', clientes:'cadastros', fornecedores:'cadastros', tipo_mercadoria:'cadastros', produtos_tab:'cadastros', precos_especiais:'cadastros', estoque_movimentacoes:'cadastros', kardex:'cadastros', usuarios:'config', empresas:'config', importador_tickets:'config', ajuda:'ajuda' };
@@ -32,9 +51,10 @@ function setActiveMenu(tab) {
 
 // TAB SWITCH
 async function switchTab(tab) {
+  if(window.event?.isTrusted&&tab!==currentTab&&!podeSairDoFormulario())return false;
   if((tab==='usuarios' || tab==='importador_tickets') && !isAdmin){ toast('Acesso restrito ao administrador.','error'); return; }
   if(tab==='empresas' && !isSuperAdminJr){ toast('Acesso exclusivo ao administrador da empresa JR.','error'); return; }
-  currentTab=tab; currentId=null; isNew=false;
+  currentTab=tab; currentId=null; isNew=false; formularioAlterado=false;
   const cfg=tabConfig[tab];
   document.getElementById('search-input').oninput = tab==='ajuda' ? filtrarAjuda : filterItems;
   document.getElementById('search-input').placeholder = tab==='ajuda' ? 'Buscar no help...' : 'Buscar...';
@@ -524,7 +544,8 @@ async function renderList() {
       nome=forn?.nome_fantasia||forn?.razao_social||`Fornecedor #${c.id_fornecedor}`;
       sub=`${c.codigo_compra||'#'+c.id_compra} · ${c.data_compra?new Date(c.data_compra).toLocaleDateString('pt-BR'):'-'} · R$ ${Number(c.valor_total||0).toFixed(2)}`;
       const st=(c.status_compra||'PENDENTE').toUpperCase();
-      pills=`<span class="pill ${st==='LIBERADA'?'on':st==='CANCELADA'?'off':'warn'}">${st}</span>`;
+      const tipoEntrada=c.tipo_entrada==='NOTA_FISCAL'?'NF-e completa':'Básica';
+      pills=`<span class="pill adm">${tipoEntrada}</span><span class="pill ${st==='LIBERADA'?'on':st==='CANCELADA'?'off':'warn'}">${st}</span>`;
     } else if(currentTab==='clientes'||currentTab==='fornecedores'){
       nome=c.nome_fantasia||c.razao_social;
       sub=`${c.cidade||'—'}, ${c.estado||'—'}`;
@@ -567,7 +588,8 @@ async function renderList() {
 
 function openItem(id) {
   id = typeof id === 'string' ? parseInt(id) : id;
-  isNew=false; currentId=id;
+  if(window.event?.isTrusted&&!podeSairDoFormulario())return;
+  isNew=false; currentId=id; formularioAlterado=false;
   const cfg=tabConfig[currentTab];
   const c=items.find(x=>Number(x[cfg.id])===Number(id));
   if(!c) return;
@@ -593,8 +615,10 @@ function openItem(id) {
 }
 
 function openNew() {
+  if(window.event?.isTrusted&&!podeSairDoFormulario())return;
   if(currentTab==='empresas') { abrirNovaEmpresa(); return; }
-  isNew=true; currentId=null;
+  if(currentTab==='compras') { abrirEscolhaTipoEntradaCompra(); return; }
+  isNew=true; currentId=null; formularioAlterado=false;
   renderList();
   showHeader('Novo '+tabConfig[currentTab].label,'novo','');
   renderForm(null);
@@ -609,7 +633,8 @@ function showHeader(t,id,sub) {
 }
 
 async function cancelForm() {
-  currentId=null; isNew=false; renderList();
+  if(window.event?.isTrusted&&!podeSairDoFormulario())return;
+  currentId=null; isNew=false; formularioAlterado=false; renderList();
   document.getElementById('content-header').style.display='none';
   if(currentTab==='empresas') {
     await renderEmpresasAdmin();

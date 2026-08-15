@@ -9,6 +9,7 @@ let isSuperAdminJr = false;
 
 // Estado
 let currentTab='clientes', items=[], filtered=[], currentId=null, isNew=false;
+let formularioAlterado=false;
 let cnpjMode='new', cnpjSelected=null;
 let cacheTipos=[], cacheFornecedores=[], cacheProdutos=[], cacheClientes=[];
 
@@ -17,7 +18,7 @@ const tabConfig = {
   contas_receber:   { table:'contas_receber',          id:'id_conta',          label:'Conta a Receber',    plural:'Contas a Receber',    order:'id_conta', searchFields:['status_recebimento','meio_pagamento','observacoes','codigo_venda','data_venda','valor_original','valor_recebido','data_vencimento','clientes.nome_fantasia','clientes.razao_social'], hasCNPJ:false, hasAtivo:false },
   contas_pagar:     { table:'contas_pagar',            id:'id_conta_pagar',    label:'Conta a Pagar',      plural:'Contas a Pagar',      order:'data_vencimento', searchFields:['status_pagamento','meio_pagamento','observacoes','valor_original','valor_pago','data_vencimento','fornecedor_nome','compras.codigo_compra','compras.data_compra'], hasCNPJ:false, hasAtivo:false },
   vendas:           { table:'vendas',                  id:'id_venda',          label:'Venda',              plural:'Vendas',              order:'status_entrega', searchFields:['codigo_venda','status_entrega','meio_pagamento','valor_final','data_venda','data_entrega','observacoes','clientes.nome_fantasia','clientes.razao_social'], hasCNPJ:false, hasAtivo:false },
-  compras:          { table:'compras',                 id:'id_compra',         label:'Compra',             plural:'Compras',             order:'data_compra', searchFields:['codigo_compra','numero_nota','status_compra','valor_total','data_compra','fornecedor_nome'], hasCNPJ:false, hasAtivo:false },
+  compras:          { table:'compras',                 id:'id_compra',         label:'Compra',             plural:'Compras',             order:'data_compra', searchFields:['codigo_compra','numero_nota','chave_nfe','status_compra','valor_total','data_compra','fornecedor_nome','observacoes'], hasCNPJ:false, hasAtivo:false },
   clientes:         { table:'clientes',                   id:'id_cliente',        label:'Cliente',            plural:'Clientes',            order:'razao_social', searchFields:['razao_social','nome_fantasia','cidade','telefone'], hasCNPJ:true, hasAtivo:true },
   fornecedores:     { table:'fornecedores',               id:'id_fornecedor',     label:'Fornecedor',         plural:'Fornecedores',         order:'razao_social', searchFields:['razao_social','nome_fantasia','cidade','telefone'], hasCNPJ:true, hasAtivo:true },
   tipo_mercadoria:  { table:'tipo_mercadoria',            id:'id_tipo',           label:'Tipo de Mercadoria', plural:'Tipos de Mercadoria',  order:'descricao',    searchFields:['descricao'], hasCNPJ:false, hasAtivo:false },
