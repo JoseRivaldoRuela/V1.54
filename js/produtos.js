@@ -144,6 +144,7 @@ function produtoAgruparVendidos(itens, produtos, vendaIds) {
 
 async function renderDashboardProdutos() {
   const body = document.getElementById('content-body');
+  setActiveMenu('produtos_tab');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard de produtos...</div>';
 
   const hoje = new Date();
@@ -225,7 +226,6 @@ async function renderDashboardProdutos() {
       <button class="dash-period-btn" onclick="mudarMesProdutosDashboard(1)" ${produtosDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Proximo mes</button>
       <button class="dash-period-btn" onclick="renderComparativoProdutos()">Comparar meses</button>
       <button class="dash-period-btn" onclick="renderUnificarMercadorias()">Unificar mercadorias</button>
-      <button class="dash-period-btn" onclick="renderQuebraEstoque()">Quebrar/montar estoque</button>
       <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${range.label}</span>
     </div>
 
@@ -511,6 +511,16 @@ function produtoQuebraLabel(p) {
   const est = Number(p.estoque_atual || 0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
   const custo = produtoFmt(p.preco_custo);
   return `${p.nome_mercadoria} (#${p.id_produto}) - ${est} ${p.unidade||''} - custo ${custo}`;
+}
+
+async function abrirQuebraEstoqueMenu() {
+  if(currentTab!=='produtos_tab') await switchTab('produtos_tab');
+  setActiveMenu('produtos_tab');
+  document.getElementById('di-produtos_tab')?.classList.remove('active');
+  document.getElementById('di-produtos-menu')?.classList.add('active');
+  document.getElementById('di-quebra-estoque')?.classList.add('active');
+  await renderQuebraEstoque();
+  closeSidebar();
 }
 
 async function renderQuebraEstoque() {

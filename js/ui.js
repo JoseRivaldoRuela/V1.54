@@ -533,7 +533,10 @@ async function renderList() {
       nome=c.descricao; sub=`ID: ${c.id_tipo}`;
     } else if(currentTab==='produtos_tab'){
       nome=c.nome_mercadoria;
-      sub=`${c.tipo_mercadoria?.descricao||''} · R$ ${Number(c.preco_venda||0).toFixed(2)}`;
+      const estoque=Number(c.estoque_atual||0).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:3});
+      const preco=Number(c.preco_venda||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const unidade=c.unidade||'UN';
+      sub=`${c.tipo_mercadoria?.descricao||''} · R$ ${preco} · Estoque: ${estoque} ${unidade}`;
       pills=`<span class="pill ${c.ativo?'on':'off'}">${c.ativo?'ativo':'inativo'}</span>`;
     } else if(currentTab==='precos_especiais'){
       nome=c.produtos?.nome_mercadoria||`Produto #${c.id_produto}`;
