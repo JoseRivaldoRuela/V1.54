@@ -35,6 +35,9 @@ tabConfig.ajuda = { table:'chamados_suporte', id:'id_chamado', label:'Chamado', 
 
 let dashPeriodo = '7'; // dias
 let dashMesOffset = 0; // 0 = mes atual, -1 = mes anterior
+let dashRankingModo = 'mes'; // mes ou ano
+let dashRankingMes = new Date().getMonth();
+let dashRankingAno = new Date().getFullYear();
 let dashComparativoMeses = 12;
 let dashComparativoAno = new Date().getFullYear();
 let dashComparativoModo = 'ultimos'; // ultimos | ano

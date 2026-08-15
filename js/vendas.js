@@ -66,9 +66,29 @@ async function renderDashboard() {
       </div>
     </div>`;
 
+  // Rankings de clientes e produtos por mes ou ano selecionado
+  const anosRanking = [...new Set(todasVendas.map(v => {
+    const data=dataVendaLocal(v);
+    return data ? Number(data.slice(0,4)) : null;
+  }).filter(Boolean))].sort((a,b)=>b-a);
+  if(!anosRanking.includes(dashRankingAno)) anosRanking.push(dashRankingAno);
+  anosRanking.sort((a,b)=>b-a);
+  const vendasRanking = todasVendas.filter(v => {
+    if(v.status_entrega==='CANCELADO') return false;
+    const data=dataVendaLocal(v);
+    if(!data || Number(data.slice(0,4))!==Number(dashRankingAno)) return false;
+    return dashRankingModo==='ano' || Number(data.slice(5,7))-1===Number(dashRankingMes);
+  });
+  const vendasRankingIds = new Set(vendasRanking.map(v=>Number(v.id_venda)));
+  const itensRanking = itens.filter(i=>vendasRankingIds.has(Number(i.id_venda)));
+  const dataRanking = new Date(dashRankingAno, dashRankingMes, 1);
+  const labelRanking = dashRankingModo==='ano'
+    ? `Ano ${dashRankingAno}`
+    : dataRanking.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+
   // Top clientes
   const clienteMap = {};
-  todasVendas.forEach(v => {
+  vendasRanking.forEach(v => {
     const nome = v.clientes?.nome_fantasia || v.clientes?.razao_social || `Cliente #${v.id_cliente}`;
     if(!clienteMap[nome]) clienteMap[nome] = {nome, total:0, qtd:0, id:v.id_cliente};
     clienteMap[nome].total += Number(v.valor_final||0);
@@ -78,7 +98,7 @@ async function renderDashboard() {
 
   // Top produtos
   const prodMap = {};
-  itens.forEach(i => {
+  itensRanking.forEach(i => {
     const nome = i.produtos?.nome_mercadoria || `Produto #${i.id_produto}`;
     if(!prodMap[nome]) prodMap[nome] = {nome, total:0, qtd:0, id:i.id_produto};
     prodMap[nome].total += Number(i.subtotal||0);
@@ -92,7 +112,8 @@ async function renderDashboard() {
   for(let i=dias-1; i>=0; i--) {
     const d = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()-i);
     const ds = fmtDataLocal(d);
-    labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
+    const diaSemana=d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','');
+    labels.push(`${diaSemana} ${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}`);
     const total = todasVendas.filter(v=>dataVendaLocal(v)===ds).reduce((s,v)=>s+Number(v.valor_final||0),0);
     valores.push(total);
   }
@@ -149,7 +170,17 @@ async function renderDashboard() {
       </div>
 
       <div class="dash-chart-box">
-        <div class="dash-chart-title"><span>🏆 Melhores Clientes</span></div>
+        <div class="dash-chart-title">
+          <span>🏆 Melhores Clientes</span>
+          <div class="dash-chart-period" style="flex-wrap:wrap;">
+            <select class="dash-period-btn" aria-label="Período dos rankings" onchange="mudarPeriodoRanking(this.value, dashRankingAno, dashRankingMes)">
+              <option value="mes" ${dashRankingModo==='mes'?'selected':''}>Mensal</option>
+              <option value="ano" ${dashRankingModo==='ano'?'selected':''}>Anual</option>
+            </select>
+            ${dashRankingModo==='mes'?`<select class="dash-period-btn" aria-label="Mês dos rankings" onchange="mudarPeriodoRanking(dashRankingModo, dashRankingAno, this.value)">${Array.from({length:12},(_,mes)=>`<option value="${mes}" ${mes===Number(dashRankingMes)?'selected':''}>${new Date(2020,mes,1).toLocaleDateString('pt-BR',{month:'short'}).replace('.','')}</option>`).join('')}</select>`:''}
+            <select class="dash-period-btn" aria-label="Ano dos rankings" onchange="mudarPeriodoRanking(dashRankingModo, this.value, dashRankingMes)">${anosRanking.map(ano=>`<option value="${ano}" ${ano===Number(dashRankingAno)?'selected':''}>${ano}</option>`).join('')}</select>
+          </div>
+        </div>
         <div class="dash-list" id="dash-clientes">
           ${topClientes.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;">Nenhum dado</div>' :
           topClientes.map((c,i) => {
@@ -171,7 +202,7 @@ async function renderDashboard() {
 
     <!-- Top Produtos -->
     <div class="dash-chart-box" style="margin-bottom:20px;">
-      <div class="dash-chart-title"><span>📦 Melhores Produtos</span></div>
+      <div class="dash-chart-title"><span>📦 Melhores Produtos</span><span style="font-size:11px;color:var(--text2);font-family:var(--mono);text-transform:capitalize;">${labelRanking}</span></div>
       <div class="dash-two-col" id="dash-produtos">
         ${topProdutos.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;grid-column:1/-1;">Nenhum dado</div>' :
         topProdutos.map((p,i) => {
@@ -234,6 +265,13 @@ async function renderDashboard() {
 
 async function mudarPeriodo(p) {
   dashPeriodo = p;
+  await renderDashboard();
+}
+
+async function mudarPeriodoRanking(modo, ano, mes) {
+  dashRankingModo=modo==='ano'?'ano':'mes';
+  dashRankingAno=Number(ano)||new Date().getFullYear();
+  dashRankingMes=Math.max(0,Math.min(11,Number(mes)));
   await renderDashboard();
 }
 
@@ -739,7 +777,7 @@ async function renderFormVenda(c) {
         </div>
         <div class="form-group">
           <label class="form-label">Quantidade</label>
-          <input class="form-input" type="number" step="1" id="item-qty" value="1" min="1" oninput="calcItemSubtotal()"/>
+          <input class="form-input" type="text" inputmode="decimal" id="item-qty" value="1" placeholder="Ex.: 0,500" oninput="calcItemSubtotal()"/>
         </div>
         <div class="form-group">
           <label class="form-label">Preço Unitário (R$)</label>
@@ -868,12 +906,13 @@ async function aplicarPadraoClienteVenda(forcar=false) {
   const pagamento = document.getElementById('f-meio_pagamento');
   const parcelas = document.getElementById('f-quantidade_parcelas');
   const dias = document.getElementById('f-dias_vencimento');
+  if(isNew && parcelas) parcelas.value = 1;
 
   const ultimas = await apiGet(`vendas?select=meio_pagamento,quantidade_parcelas,dias_vencimento&id_cliente=eq.${idCliente}&order=id_venda.desc&limit=1`);
   if(Array.isArray(ultimas) && ultimas.length > 0) {
     const ultima = ultimas[0];
     if(pagamento && ultima.meio_pagamento) pagamento.value = ultima.meio_pagamento;
-    if(parcelas && ultima.quantidade_parcelas) parcelas.value = Math.max(1, Number(ultima.quantidade_parcelas));
+    if(parcelas && !isNew && ultima.quantidade_parcelas) parcelas.value = Math.max(1, Number(ultima.quantidade_parcelas));
     if(dias && ultima.dias_vencimento !== null && ultima.dias_vencimento !== undefined) dias.value = Math.max(0, Number(ultima.dias_vencimento));
     calcularVencimentoVenda();
     await verificarContasClienteVenda();
@@ -882,18 +921,25 @@ async function aplicarPadraoClienteVenda(forcar=false) {
 
   const cliente = cacheClientes.find(c=>String(c.id_cliente)===String(idCliente));
   if(pagamento && cliente?.meio_pagamento_padrao) pagamento.value = cliente.meio_pagamento_padrao;
-  if(parcelas && cliente?.parcelas_padrao) parcelas.value = cliente.parcelas_padrao;
+  if(parcelas && !isNew && cliente?.parcelas_padrao) parcelas.value = cliente.parcelas_padrao;
   calcularVencimentoVenda();
   await verificarContasClienteVenda();
 }
 
+function numeroVenda(valor) {
+  let texto=String(valor??'').trim().replace(/\s/g,'').replace(/^R\$/i,'');
+  if(texto.includes(',')) texto=texto.replace(/\./g,'').replace(',','.');
+  const numero=Number(texto);
+  return Number.isFinite(numero)?numero:0;
+}
+
 function calcItemSubtotal() {
-  const qty = parseInt(document.getElementById('item-qty')?.value||0);
-  const preco = parseFloat(document.getElementById('item-preco')?.value||0);
-  const desc = parseFloat(document.getElementById('item-desconto')?.value||0);
+  const qty = numeroVenda(document.getElementById('item-qty')?.value);
+  const preco = numeroVenda(document.getElementById('item-preco')?.value);
+  const desc = numeroVenda(document.getElementById('item-desconto')?.value);
   const sub = (qty * preco) - desc;
   const el = document.getElementById('item-subtotal');
-  if(el) el.value = 'R$ ' + Math.max(0,sub).toFixed(2);
+  if(el) el.value = 'R$ ' + Math.max(0,sub).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
 function adicionarItem() {
@@ -901,9 +947,9 @@ function adicionarItem() {
   const sel = document.getElementById('item-produto');
   const idProd = sel.value;
   const nomeProd = sel.options[sel.selectedIndex]?.text?.split(' — ')[0] || '';
-  const qty = parseInt(document.getElementById('item-qty').value||0);
-  const preco = parseFloat(document.getElementById('item-preco').value||0);
-  const desc = parseFloat(document.getElementById('item-desconto').value||0);
+  const qty = numeroVenda(document.getElementById('item-qty').value);
+  const preco = numeroVenda(document.getElementById('item-preco').value);
+  const desc = numeroVenda(document.getElementById('item-desconto').value);
 
   if(!idProd){ toast('Selecione um produto','error'); return; }
   if(qty<=0){ toast('Quantidade deve ser maior que zero','error'); return; }
@@ -1031,9 +1077,12 @@ async function imprimirTicketVenda(idVenda) {
 
   const cliente = venda.clientes?.nome_fantasia || venda.clientes?.razao_social || `Cliente #${venda.id_cliente}`;
   const fmt = n => 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const subtotal = itens.reduce((s,i)=>s+Number(i.subtotal || ((Number(i.quantidade||0)*Number(i.preco_unitario||0))-Number(i.desconto_item||0))),0);
-  const desconto = Number(venda.desconto_total||0);
-  const total = Number(venda.valor_final||Math.max(0,subtotal-desconto));
+  const subtotal = itens.reduce((s,i)=>s+(Number(i.quantidade||0)*Number(i.preco_unitario||0)),0);
+  const descontoItens = itens.reduce((s,i)=>s+Number(i.desconto_item||0),0);
+  const descontoVenda = Number(venda.desconto_total||0);
+  const desconto = descontoItens + descontoVenda;
+  const valorFinalBanco = Number(venda.valor_final);
+  const total = Number.isFinite(valorFinalBanco) ? valorFinalBanco : Math.max(0,subtotal-desconto);
   const statusFin = venda.status_entrega === 'ENTREGUE' ? 'A RECEBER' : 'Pendente';
   const itensTexto = itens.map(i => {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
