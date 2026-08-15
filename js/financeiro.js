@@ -254,7 +254,7 @@ async function renderFormConta(c) {
     <div class="form-actions">
       ${!origemVenda?'<button class="btn btn-primary" id="btn-save" onclick="saveConta()">✓ Salvar</button>':''}
       ${c&&c.status_recebimento!=='RECEBIDO'?'<button class="btn btn-danger" onclick="excluirContaReceber()">Excluir</button>':''}
-      ${c && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? '<button class="btn btn-secondary" onclick="parcelarContaReceber()">Parcelar conta</button>' : ''}
+      ${c && !origemVenda && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? '<button class="btn btn-secondary" onclick="parcelarContaReceber()">Parcelar conta</button>' : ''}
       ${c && saldoAberto > 0.005 ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="baixarContaParcial()">Baixar Valor</button>` : ''}
       ${c ? (c.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">💰 Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">💰 Recebido</span>') : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
@@ -358,7 +358,7 @@ async function marcarRecebido() {
     meio_pagamento: document.getElementById('f-meio_pagamento').value||null
   };
   const{ok}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
-  if(ok){ invalidarResumoContasVendas(); toast('Pagamento confirmado!','success'); await loadItems(); openItem(currentId); }
+  if(ok){invalidarResumoContasVendas(); toast('Pagamento confirmado!','success'); await loadItems(); openItem(currentId);}
   else toast('Erro ao confirmar','error');
 }
 

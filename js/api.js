@@ -47,5 +47,21 @@ async function apiPost(p,b){
   const r=await fetch(url(p),{method:'POST',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)});
   return{ok:r.ok,data:await r.json()};
 }
-async function apiPatch(p,b){ const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'PATCH',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}); return{ok:r.ok,data:await r.json()}; }
-async function apiDelete(p){ const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'DELETE',headers:hdrs({'Authorization':`Bearer ${ANON_KEY}`})}); return r.ok; }
+async function apiPatch(p,b){
+  const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'PATCH',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}),data=await r.json();
+  const tabela=String(p||'').split('?')[0];
+  let erroSincronizacao=null;
+  if(r.ok&&['contas_receber','contas_pagar'].includes(tabela)&&typeof sincronizarTituloFinanceiroAposAlteracao==='function'){
+    try{for(const titulo of Array.isArray(data)?data:[])await sincronizarTituloFinanceiroAposAlteracao(tabela,titulo);}catch(e){erroSincronizacao=e;}
+  }
+  return erroSincronizacao?{ok:false,data:{message:'Alteração salva localmente, mas o Finanças não foi atualizado: '+(erroSincronizacao.message||erroSincronizacao)}}:{ok:r.ok,data};
+}
+async function apiDelete(p){
+  const tabela=String(p||'').split('?')[0];
+  if(['contas_receber','contas_pagar'].includes(tabela)&&typeof cancelarMovimentosFinancas==='function'){
+    const filtro=String(p||'').includes('?')?String(p).split('?').slice(1).join('?'):'';
+    const titulos=await apiGet(`${tabela}?select=id_movimento_financas,data_vencimento${filtro?'&'+filtro:''}`);
+    try{await cancelarMovimentosFinancas(titulos);}catch(e){console.error('Cancelamento no Finanças falhou:',e);return false;}
+  }
+  const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'DELETE',headers:hdrs({'Authorization':`Bearer ${ANON_KEY}`})}); return r.ok;
+}
