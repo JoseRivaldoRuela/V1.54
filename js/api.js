@@ -19,6 +19,33 @@ const hdrs=(e={})=>{
   return {'Authorization':`Bearer ${ANON_KEY}`,'Accept':'application/json',...(token?{'X-App-Session':token}:{}),...e};
 };
 async function apiGet(p){ const r=await fetch(url(caminhoComEscopoEmpresa(p)),{headers:hdrs({'Prefer':'count=exact'})}); return r.json(); }
-async function apiPost(p,b){ const r=await fetch(url(p),{method:'POST',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}); return{ok:r.ok,data:await r.json()}; }
+const apiNormalizarDuplicidade=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const apiDocumentoDuplicidade=v=>String(v||'').replace(/\D/g,'');
+async function validarCadastroDuplicado(p,b){
+  const tabela=String(p||'').split('?')[0];
+  if(!['fornecedores','produtos'].includes(tabela))return null;
+  const novos=Array.isArray(b)?b:[b], existentes=await apiGet(`${tabela}?select=*`);
+  if(!Array.isArray(existentes))return null;
+  const vistos=[];
+  for(const novo of novos){
+    if(tabela==='fornecedores'){
+      const documento=apiDocumentoDuplicidade(novo.cpf_cnpj), nomes=[novo.razao_social,novo.nome_fantasia].map(apiNormalizarDuplicidade).filter(Boolean);
+      const repetido=existentes.concat(vistos).find(x=>(documento&&apiDocumentoDuplicidade(x.cpf_cnpj)===documento)||nomes.some(n=>[x.razao_social,x.nome_fantasia].map(apiNormalizarDuplicidade).includes(n)));
+      if(repetido)return `Fornecedor já cadastrado: ${repetido.nome_fantasia||repetido.razao_social}.`;
+    }else{
+      const nome=apiNormalizarDuplicidade(novo.nome_mercadoria);
+      const repetido=existentes.concat(vistos).find(x=>nome&&apiNormalizarDuplicidade(x.nome_mercadoria)===nome);
+      if(repetido)return `Produto já cadastrado: ${repetido.nome_mercadoria}.`;
+    }
+    vistos.push(novo);
+  }
+  return null;
+}
+async function apiPost(p,b){
+  const duplicidade=await validarCadastroDuplicado(p,b);
+  if(duplicidade)return {ok:false,data:{message:duplicidade,code:'DUPLICATE_CADASTRO'}};
+  const r=await fetch(url(p),{method:'POST',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)});
+  return{ok:r.ok,data:await r.json()};
+}
 async function apiPatch(p,b){ const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'PATCH',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}); return{ok:r.ok,data:await r.json()}; }
 async function apiDelete(p){ const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'DELETE',headers:hdrs({'Authorization':`Bearer ${ANON_KEY}`})}); return r.ok; }

@@ -2,9 +2,74 @@ let itensCompraAtual = [];
 let itemCompraEmEdicao = null;
 let chartCompras = null;
 let chartContasPagar = null;
+let tipoEntradaCompraNova = 'BASICA';
 
 function compraFmt(n) {
   return 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function compraNumeroDecimal(valor) {
+  let texto=String(valor??'').trim().replace(/\s|R\$/gi,'');
+  if(texto.includes(',')) texto=texto.replace(/\./g,'').replace(',','.');
+  const numero=Number(texto);
+  return Number.isFinite(numero)?numero:0;
+}
+
+function normalizarPrecoLiberacao(el) {
+  if(!el)return;
+  el.value=compraNumeroDecimal(el.value).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+const compraEsc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function compraObjetoFiscal(valor) {
+  if(valor&&typeof valor==='object')return valor;
+  try{return JSON.parse(valor||'{}');}catch(e){return {};}
+}
+
+function compraImpostosItensXml(xml) {
+  if(!xml)return [];
+  try{
+    const doc=new DOMParser().parseFromString(xml,'application/xml');
+    const txt=(el,tag)=>el?.getElementsByTagName(tag)?.[0]?.textContent?.trim()||'';
+    return [...doc.getElementsByTagName('det')].map(det=>{
+      const prod=det.getElementsByTagName('prod')[0],imp=det.getElementsByTagName('imposto')[0];
+      const grupo=tag=>imp?.getElementsByTagName(tag)?.[0];
+      const campos=(el,nomes)=>Object.fromEntries(nomes.map(n=>[n,txt(el,n)]).filter(([,v])=>v!==''));
+      return {numero:det.getAttribute('nItem'),produto:txt(prod,'xProd'),codigo:txt(prod,'cProd'),
+        icms:campos(grupo('ICMS'),['orig','CST','CSOSN','modBC','vBC','pICMS','vICMS','pFCP','vFCP','modBCST','vBCST','pICMSST','vICMSST']),
+        ipi:campos(grupo('IPI'),['cEnq','CST','vBC','pIPI','vIPI']),
+        pis:campos(grupo('PIS'),['CST','vBC','pPIS','vPIS']),
+        cofins:campos(grupo('COFINS'),['CST','vBC','pCOFINS','vCOFINS']),
+        ii:campos(grupo('II'),['vBC','vDespAdu','vII','vIOF'])};
+    });
+  }catch(e){return [];}
+}
+
+function renderPainelFiscalCompra(c) {
+  if(c?.tipo_entrada!=='NOTA_FISCAL')return '';
+  const dados=compraObjetoFiscal(c.dados_nfe), impostos=compraObjetoFiscal(c.impostos_nfe);
+  const fornecedor=dados.fornecedor||{}, duplicatas=Array.isArray(dados.duplicatas)?dados.duplicatas:[];
+  const itensFiscais=compraImpostosItensXml(c.xml_nfe);
+  const nomes={vBC:'Base ICMS',vICMS:'ICMS',vICMSDeson:'ICMS desonerado',vFCP:'FCP',vBCST:'Base ICMS-ST',vST:'ICMS-ST',vFCPST:'FCP-ST',vFCPSTRet:'FCP-ST retido',vProd:'Produtos',vFrete:'Frete',vSeg:'Seguro',vDesc:'Desconto',vII:'II',vIPI:'IPI',vIPIDevol:'IPI devolvido',vPIS:'PIS',vCOFINS:'COFINS',vOutro:'Outras despesas',vNF:'Total NF-e',vTotTrib:'Tributos estimados'};
+  const blocoTributo=(titulo,obj)=>Object.keys(obj||{}).length?`<div style="margin-top:6px;"><strong style="font-size:11px;color:var(--accent2);">${titulo}</strong><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">${Object.entries(obj).map(([k,v])=>`<span style="font-size:10px;color:var(--text2);">${k}: <b style="color:var(--text);">${compraEsc(v)}</b></span>`).join('')}</div></div>`:'';
+  return `<div class="section-label"><span>Dados completos da NF-e</span><span class="pill adm">Fiscal</span></div>
+    <div class="dash-chart-box" style="margin-bottom:14px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
+        <div><div class="form-label">Número / Série</div><strong>${compraEsc(c.numero_nota||dados.numero||'-')} / ${compraEsc(dados.serie||'-')}</strong></div>
+        <div><div class="form-label">Modelo</div><strong>${compraEsc(dados.modelo||'-')}</strong></div>
+        <div><div class="form-label">Chave de acesso</div><strong style="font-size:11px;word-break:break-all;">${compraEsc(c.chave_nfe||dados.chave||'-')}</strong></div>
+        <div><div class="form-label">CNPJ emitente</div><strong>${compraEsc(fornecedor.cnpj||'-')}</strong></div>
+        <div><div class="form-label">Razão social</div><strong>${compraEsc(fornecedor.razao||'-')}</strong></div>
+        <div><div class="form-label">Inscrição estadual</div><strong>${compraEsc(fornecedor.ie||'-')}</strong></div>
+      </div>
+      <div class="section-label" style="margin-top:14px;"><span>Totais e impostos</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;">${Object.entries(impostos).map(([k,v])=>`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px;"><div style="font-size:10px;color:var(--text3);">${compraEsc(nomes[k]||k)}</div><strong style="font-family:var(--mono);font-size:12px;">${compraFmt(v)}</strong></div>`).join('')||'<span style="color:var(--text3);font-size:12px;">Sem resumo fiscal estruturado.</span>'}</div>
+      ${duplicatas.length?`<div class="section-label" style="margin-top:14px;"><span>Duplicatas</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;">${duplicatas.map((d,i)=>`<span class="pill warn">${i+1}: ${compraEsc(d.vencimento)} · ${compraFmt(d.valor)}</span>`).join('')}</div>`:''}
+      <div class="section-label" style="margin-top:14px;"><span>Impostos por item</span></div>
+      ${itensFiscais.length?itensFiscais.map(i=>`<details style="border-top:1px solid var(--border);padding:9px 0;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Item ${compraEsc(i.numero)} · ${compraEsc(i.produto)} <span style="color:var(--text3);font-weight:400;">(${compraEsc(i.codigo)})</span></summary>${blocoTributo('ICMS',i.icms)}${blocoTributo('IPI',i.ipi)}${blocoTributo('PIS',i.pis)}${blocoTributo('COFINS',i.cofins)}${blocoTributo('II',i.ii)}</details>`).join(''):'<div style="color:var(--text3);font-size:12px;">Sem impostos estruturados por item.</div>'}
+      ${c.xml_nfe?`<details style="margin-top:14px;"><summary style="cursor:pointer;color:var(--accent2);font-size:12px;">Ver XML original completo</summary><pre style="white-space:pre-wrap;word-break:break-all;max-height:360px;overflow:auto;background:var(--surface2);padding:10px;margin-top:8px;font-size:10px;">${compraEsc(c.xml_nfe)}</pre></details>`:''}
+    </div>`;
 }
 
 function contaPagarDateLocal(value) {
@@ -181,6 +246,7 @@ function limparFiltroContasPagar() {
 
 async function renderDashboardCompras() {
   const body = document.getElementById('content-body');
+  setActiveMenu('compras');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
 
   await loadCaches();
@@ -415,6 +481,61 @@ async function carregarItensCompra(idCompra) {
   });
 }
 
+function abrirEscolhaTipoEntradaCompra() {
+  isNew=true;
+  currentId=null;
+  renderList();
+  showHeader('Nova compra','novo','Escolha o tipo de entrada');
+  document.getElementById('content-body').innerHTML=`
+    <div style="max-width:760px;margin:30px auto;">
+      <div class="section-label"><span>Como deseja cadastrar esta entrada?</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
+        <button class="dash-chart-box" onclick="abrirEntradaBasicaCompra()" style="cursor:pointer;text-align:left;color:var(--text);">
+          <div style="font-size:16px;font-weight:700;margin-bottom:7px;">Entrada básica</div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.5;">Cadastre fornecedor, produtos, quantidades, custos e pagamento manualmente.</div>
+        </button>
+        <button class="dash-chart-box" onclick="abrirCadastroNfeCompletaCompra()" style="cursor:pointer;text-align:left;color:var(--text);">
+          <div style="font-size:16px;font-weight:700;margin-bottom:7px;">NF-e completa</div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.5;">Digite manualmente os dados da nota, impostos, produtos e pagamento.</div>
+        </button>
+        <button class="dash-chart-box" onclick="abrirConciliacaoNotaMenu()" style="cursor:pointer;text-align:left;color:var(--text);">
+          <div style="font-size:16px;font-weight:700;margin-bottom:7px;">Importar XML</div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.5;">Leia o XML da NF-e e concilie automaticamente os dados fiscais.</div>
+        </button>
+      </div>
+      <div class="form-actions"><button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button></div>
+    </div>`;
+  closeSidebar();
+}
+
+function abrirEntradaBasicaCompra() {
+  tipoEntradaCompraNova='BASICA';
+  isNew=true;
+  currentId=null;
+  showHeader('Nova compra','novo','Entrada básica');
+  renderFormCompra(null);
+}
+
+async function abrirCadastroEntradaBasicaMenu(){
+  if(currentTab!=='compras')await switchTab('compras');
+  abrirEntradaBasicaCompra();
+  closeSidebar();
+}
+
+function abrirCadastroNfeCompletaCompra() {
+  tipoEntradaCompraNova='NOTA_FISCAL';
+  isNew=true;
+  currentId=null;
+  showHeader('Nova compra','novo','NF-e completa — digitação manual');
+  renderFormCompra(null);
+}
+
+async function abrirCadastroNfeCompletaMenu(){
+  if(currentTab!=='compras')await switchTab('compras');
+  abrirCadastroNfeCompletaCompra();
+  closeSidebar();
+}
+
 async function renderFormCompra(c) {
   await loadCaches();
   await loadCacheCobrancas();
@@ -438,9 +559,20 @@ async function renderFormCompra(c) {
   const quantidadeParcelas = Math.max(1, Number(v('quantidade_parcelas') || 1));
   const diasParcelas = Math.max(0, Number(v('dias_vencimento') || 0));
   const vencimento = v('data_vencimento') || compraAddDays(dataCompra.slice(0,10), prazo);
+  const ehNfe = c ? c.tipo_entrada==='NOTA_FISCAL' : tipoEntradaCompraNova==='NOTA_FISCAL';
+  const dadosFiscais=compraObjetoFiscal(c?.dados_nfe), impostosFiscais=compraObjetoFiscal(c?.impostos_nfe);
+  const campoImposto=(campo,rotulo)=>`<div class="form-group"><label class="form-label">${rotulo}</label><input class="form-input" type="number" min="0" step="0.01" data-imposto-nfe="${campo}" value="${Number(impostosFiscais[campo]||0)}" ${bloqueado?'disabled':''}/></div>`;
+  const cadastroFiscal=ehNfe?`<div class="section-label"><span>Dados da NF-e</span></div><div class="form-grid">
+    <div class="form-group"><label class="form-label">Número da nota *</label><input class="form-input" id="f-numero_nota" value="${compraEsc(c?.numero_nota||dadosFiscais.numero||'')}" ${bloqueado?'disabled':''}/></div>
+    <div class="form-group"><label class="form-label">Série *</label><input class="form-input" id="f-serie_nfe" value="${compraEsc(dadosFiscais.serie||'')}" ${bloqueado?'disabled':''}/></div>
+    <div class="form-group"><label class="form-label">Modelo</label><input class="form-input" id="f-modelo_nfe" value="${compraEsc(dadosFiscais.modelo||'55')}" ${bloqueado?'disabled':''}/></div>
+    <div class="form-group full"><label class="form-label">Chave de acesso</label><input class="form-input" id="f-chave_nfe" maxlength="44" value="${compraEsc(c?.chave_nfe||dadosFiscais.chave||'')}" ${bloqueado?'disabled':''}/></div>
+    ${campoImposto('vBC','Base de cálculo ICMS')}${campoImposto('vICMS','Valor ICMS')}${campoImposto('vST','ICMS-ST')}${campoImposto('vIPI','IPI')}${campoImposto('vPIS','PIS')}${campoImposto('vCOFINS','COFINS')}${campoImposto('vFrete','Frete')}${campoImposto('vDesc','Desconto')}
+  </div>`:'';
+  const painelFiscal = c?.tipo_entrada==='NOTA_FISCAL' ? renderPainelFiscalCompra(c) : '';
 
   document.getElementById('content-body').innerHTML = `
-    <div class="section-label"><span>Entrada de Compra</span><span class="pill ${status==='LIBERADA'?'on':status==='CANCELADA'?'off':'warn'}">${status}</span></div>
+    <div class="section-label"><span>${ehNfe?'NF-e Completa':'Entrada Básica'}</span><span class="pill ${status==='LIBERADA'?'on':status==='CANCELADA'?'off':'warn'}">${status}</span></div>
     <input type="hidden" id="f-codigo_compra" value="${codigo||''}"/>
     <div class="form-grid">
       <div class="form-group">
@@ -480,6 +612,9 @@ async function renderFormCompra(c) {
         <input class="form-input" id="f-total_compra" value="${compraFmt(v('valor_total')||totalCompraAtual())}" readonly style="color:var(--accent);font-weight:700;"/>
       </div>
     </div>
+
+    ${cadastroFiscal}
+    ${painelFiscal}
 
     <div class="section-label"><span>Itens da Compra</span></div>
     ${!bloqueado?`
@@ -646,7 +781,8 @@ function calcularVencimentoCompra() {
 }
 
 function getCompraPayload() {
-  return {
+  const ehNfe=!!document.getElementById('f-numero_nota');
+  const payload={
     codigo_compra: document.getElementById('f-codigo_compra').value.trim(),
     id_fornecedor: Number(document.getElementById('f-id_fornecedor').value),
     data_compra: new Date(document.getElementById('f-data_compra').value).toISOString(),
@@ -659,8 +795,21 @@ function getCompraPayload() {
     observacoes: document.getElementById('f-observacoes').value.trim() || null,
     id_produto: itensCompraAtual[0]?.id_produto || null,
     quantidade: itensCompraAtual.reduce((s,i)=>s+Number(i.quantidade||0),0) || null,
-    preco_entrada: itensCompraAtual[0]?.preco_entrada || null
+    preco_entrada: itensCompraAtual[0]?.preco_entrada || null,
+    tipo_entrada: ehNfe?'NOTA_FISCAL':'BASICA'
   };
+  if(ehNfe){
+    const numero=document.getElementById('f-numero_nota').value.trim();
+    const chave=document.getElementById('f-chave_nfe').value.replace(/\D/g,'');
+    const impostos=Object.fromEntries([...document.querySelectorAll('[data-imposto-nfe]')].map(el=>[el.dataset.impostoNfe,Number(el.value||0)]));
+    const compraExistente=items.find(x=>Number(x.id_compra)===Number(currentId));
+    const dadosExistentes=compraObjetoFiscal(compraExistente?.dados_nfe);
+    payload.numero_nota=numero||null;
+    payload.chave_nfe=chave||null;
+    payload.dados_nfe={...dadosExistentes,origem:dadosExistentes.origem||'DIGITACAO',numero,serie:document.getElementById('f-serie_nfe').value.trim(),modelo:document.getElementById('f-modelo_nfe').value.trim(),chave};
+    payload.impostos_nfe=impostos;
+  }
+  return payload;
 }
 
 function buildCompraItensPayload(idCompra) {
@@ -683,6 +832,9 @@ async function salvarItensCompra(idCompra) {
 async function saveCompra() {
   const data = getCompraPayload();
   if(!data.id_fornecedor){ toast('Selecione o fornecedor','error'); return; }
+  if(data.tipo_entrada==='NOTA_FISCAL'&&!data.numero_nota){ toast('Informe o número da NF-e','error'); return; }
+  if(data.tipo_entrada==='NOTA_FISCAL'&&!data.dados_nfe?.serie){ toast('Informe a série da NF-e','error'); return; }
+  if(data.chave_nfe&&data.chave_nfe.length!==44){ toast('A chave da NF-e deve ter 44 dígitos','error'); return; }
   if(!document.getElementById('f-data_compra')?.value){ toast('Informe a data','error'); return; }
   if(!itensCompraAtual.length){ toast('Adicione pelo menos um produto','error'); return; }
   if(data.quantidade_parcelas>1&&data.dias_vencimento===0){ toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error'); return; }
@@ -771,8 +923,8 @@ async function abrirLiberacaoCompra(idCompra) {
                   <td style="padding:8px;">${i.nome_produto}</td>
                   <td style="padding:8px;text-align:right;">${Number(i.quantidade).toFixed(2)}</td>
                   <td style="padding:8px;text-align:right;font-family:var(--mono);">${compraFmt(i.preco_entrada)}</td>
-                  <td style="padding:8px;"><input class="form-input" type="number" step="0.01" id="lib-custo-${i.id_produto}" value="${Number(i.preco_entrada||prod.preco_custo||0).toFixed(2)}"/></td>
-                  <td style="padding:8px;"><input class="form-input" type="number" step="0.01" id="lib-venda-${i.id_produto}" value="${Number(prod.preco_venda||0).toFixed(2)}"/></td>
+                  <td style="padding:8px;"><input class="form-input" type="text" inputmode="decimal" id="lib-custo-${i.id_produto}" value="${Number(i.preco_entrada||prod.preco_custo||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}" onfocus="this.select()" onblur="normalizarPrecoLiberacao(this)"/></td>
+                  <td style="padding:8px;"><input class="form-input" type="text" inputmode="decimal" id="lib-venda-${i.id_produto}" value="${Number(prod.preco_venda||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}" onfocus="this.select()" onblur="normalizarPrecoLiberacao(this)"/></td>
                 </tr>`;
               }).join('')}</tbody>
             </table>
@@ -808,8 +960,13 @@ async function confirmarLiberacaoCompra(idCompra) {
     if(!produto){ toast(`Produto ${item.nome_produto} não encontrado.`,'error'); return; }
     const estoqueAnterior = Number(produto.estoque_atual||0);
     const estoqueAtual = estoqueAnterior + Number(item.quantidade||0);
-    const precoCusto = Number(document.getElementById(`lib-custo-${item.id_produto}`)?.value||item.preco_entrada||0);
-    const precoVenda = Number(document.getElementById(`lib-venda-${item.id_produto}`)?.value||0);
+    const precoCusto = compraNumeroDecimal(document.getElementById(`lib-custo-${item.id_produto}`)?.value||item.preco_entrada||0);
+    const precoVenda = compraNumeroDecimal(document.getElementById(`lib-venda-${item.id_produto}`)?.value||0);
+    if(precoCusto<0||precoVenda<0){
+      toast(`Custo e preço de venda de ${item.nome_produto} não podem ser negativos.`,'error');
+      if(btn){btn.disabled=false;btn.textContent='Liberar';}
+      return;
+    }
     const custoAnterior = Number(produto.preco_custo || 0);
     const custoMudou = Math.abs(precoCusto - custoAnterior) >= 0.005;
     let dataBaseCusto = '';
