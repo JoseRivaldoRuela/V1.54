@@ -1730,6 +1730,10 @@ async function saveVenda() {
 async function marcarEntregue(idVenda) {
   await loadCacheCobrancas();
   const venda = items.find(x=>x.id_venda===idVenda) || {};
+  let integracao={ativa:false,contas:[],categoria:null};
+  try{integracao=await carregarIntegracaoFinancas('entrada');}catch(e){toast('Não foi possível consultar o Finanças: '+e.message,'error');return;}
+  if(integracao.ativa&&!integracao.categoria){toast('Cadastre a categoria Vendas no sistema Finanças.','error');return;}
+  if(integracao.ativa&&!integracao.contas.length){toast('Cadastre uma conta ativa no sistema Finanças.','error');return;}
   const pagamentoAtual = venda.meio_pagamento || '';
   const vencimentoAtual = venda.data_vencimento || toLocalDateInput();
   const parcelasAtual = Math.max(1, Number(venda.quantidade_parcelas || 1));
@@ -1749,6 +1753,7 @@ async function marcarEntregue(idVenda) {
             <label class="form-label">Data de Entrega</label>
             <input class="form-input" type="datetime-local" id="entrega-data" value="${toLocalDateTimeInput()}"/>
           </div>
+          ${integracao.ativa?`<div class="form-group" style="margin-bottom:14px;"><label class="form-label">Conta no Finanças *</label><select class="form-input form-select" id="entrega-conta-financas">${opcoesContasFinancas(integracao.contas,venda.id_conta_financas)}</select><div style="font-size:11px;color:var(--text3);">Categoria: Vendas · lançamento pendente até o recebimento.</div></div>`:''}
           <div class="form-group" style="margin-bottom:14px;">
             <label class="form-label">Meio de Pagamento</label>
             <select class="form-input form-select" id="entrega-pagamento">
@@ -1791,8 +1796,10 @@ async function confirmarEntrega(idVenda) {
   const parcelasEntrega = Math.max(1, parseInt(document.getElementById('entrega-parcelas')?.value||'1',10)||1);
   const diasEntrega = Math.max(0, parseInt(document.getElementById('entrega-dias')?.value||'0',10)||0);
   const obs = document.getElementById('entrega-obs').value.trim();
+  const contaFinancas=Number(document.getElementById('entrega-conta-financas')?.value||0);
 
   if(!pagamento){ toast('Selecione o meio de pagamento','error'); return; }
+  if(document.getElementById('entrega-conta-financas')&&!contaFinancas){toast('Confirme a conta do Finanças','error');return;}
   const btn = document.getElementById('btn-confirmar-entrega');
   if(btn){ btn.disabled = true; btn.textContent = 'Confirmando...'; }
 
@@ -1807,6 +1814,7 @@ async function confirmarEntrega(idVenda) {
     dias_vencimento: diasEntrega,
     data_vencimento: vencimento||null
   };
+  if(contaFinancas)dadosEntrega.id_conta_financas=contaFinancas;
   const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`, dadosEntrega);
   if(!vendaRes.ok) {
     toast('Erro ao confirmar entrega: '+(vendaRes.data?.message||'erro'),'error');
@@ -1828,6 +1836,12 @@ async function confirmarEntrega(idVenda) {
     toast('Entrega confirmada mas houve erro ao gerar conta a receber: '+(contaRes.data?.message||''),'error');
     if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
     return;
+  }
+  if(contaFinancas){
+    const integracao=await carregarIntegracaoFinancas('entrada');
+    const titulos=await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc`);
+    const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',titulos,{ativa:true,tipo:'entrada',contaId:contaFinancas,categoria:integracao.categoria,descricao:`Venda ${venda.codigo_venda||'#'+idVenda}`,documento:venda.codigo_venda});
+    if(!vinculo.ok){toast('Entrega confirmada, mas a integração financeira falhou: '+vinculo.message,'error');return;}
   }
 
   if(venda?.status_entrega !== 'ENTREGUE') {

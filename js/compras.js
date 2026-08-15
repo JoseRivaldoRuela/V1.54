@@ -893,6 +893,10 @@ async function abrirLiberacaoCompra(idCompra) {
   const venc = compra.data_vencimento || compraAddDays((compra.data_compra||'').slice(0,10), compra.prazo_dias||0);
   const parcelas = Math.max(1, Number(compra.quantidade_parcelas || 1));
   const intervalo = Math.max(0, Number(compra.dias_vencimento || 0));
+  let integracao={ativa:false,contas:[],categoria:null};
+  try{integracao=await carregarIntegracaoFinancas('saida');}catch(e){toast('Não foi possível consultar o Finanças: '+e.message,'error');return;}
+  if(integracao.ativa&&!integracao.categoria){toast('Cadastre a categoria Compras no sistema Finanças.','error');return;}
+  if(integracao.ativa&&!integracao.contas.length){toast('Cadastre uma conta ativa no sistema Finanças.','error');return;}
   document.body.insertAdjacentHTML('beforeend',`
     <div class="modal-overlay" id="compra-liberar-modal" style="display:flex;">
       <div class="modal" style="max-width:760px;">
@@ -904,7 +908,8 @@ async function abrirLiberacaoCompra(idCompra) {
           <div class="search-banner">Revise custo e preço de venda por produto. Ao liberar, todos os estoques serão somados e uma conta a pagar será gerada.</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:12px;">
             <div class="form-group"><label class="form-label">1o vencimento</label><input class="form-input" type="date" id="lib-vencimento" value="${venc}"/></div>
-            <div class="form-group"><label class="form-label">Meio</label><input class="form-input" id="lib-meio" value="${compra.meio_pagamento||''}" placeholder="Ex: PIX, BOLETO..."/></div>
+            <div class="form-group"><label class="form-label">Meio de pagamento *</label><select class="form-input form-select" id="lib-meio"><option value="">Selecione...</option>${cacheCobrancas.map(x=>`<option value="${compraEsc(x.descricao)}" ${x.descricao===compra.meio_pagamento?'selected':''}>${compraEsc(x.descricao)}</option>`).join('')}</select></div>
+            ${integracao.ativa?`<div class="form-group"><label class="form-label">Conta no Finanças *</label><select class="form-input form-select" id="lib-conta-financas">${opcoesContasFinancas(integracao.contas,compra.id_conta_financas)}</select><div style="font-size:11px;color:var(--text3);">Categoria: Compras · pendente até o pagamento.</div></div>`:''}
             <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="lib-parcelas" value="${parcelas}"/></div>
             <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="lib-dias" value="${intervalo}"/></div>
           </div>
@@ -948,6 +953,10 @@ async function confirmarLiberacaoCompra(idCompra) {
   if(btn){ btn.disabled = true; btn.textContent = 'Liberando...'; }
   const parcelas = Math.max(1, parseInt(document.getElementById('lib-parcelas')?.value||'1',10)||1);
   const intervalo = Math.max(0, parseInt(document.getElementById('lib-dias')?.value||'0',10)||0);
+  const contaFinancas=Number(document.getElementById('lib-conta-financas')?.value||0);
+  const meioConfirmado=document.getElementById('lib-meio')?.value.trim();
+  if(!meioConfirmado){toast('Confirme o meio de pagamento.','error');if(btn){btn.disabled=false;btn.textContent='Liberar';}return;}
+  if(document.getElementById('lib-conta-financas')&&!contaFinancas){toast('Confirme a conta do Finanças.','error');if(btn){btn.disabled=false;btn.textContent='Liberar';}return;}
   if(Number(compra.valor_total||0) < parcelas/100) {
     toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');
     if(btn){ btn.disabled=false; btn.textContent='Liberar'; }
@@ -1017,7 +1026,7 @@ async function confirmarLiberacaoCompra(idCompra) {
   }
 
   const vencimento = document.getElementById('lib-vencimento').value || compra.data_vencimento || null;
-  const meio = document.getElementById('lib-meio').value || compra.meio_pagamento || null;
+  const meio = meioConfirmado || compra.meio_pagamento || null;
   const compraRes = await apiPatch(`compras?id_compra=eq.${idCompra}`,{
     status_compra:'LIBERADA',
     data_vencimento: vencimento,
@@ -1055,6 +1064,13 @@ async function confirmarLiberacaoCompra(idCompra) {
     toast('Erro ao gerar conta a pagar. Entrada desfeita. '+(contaRes.data?.message||''),'error');
     return;
   }
+  if(contaFinancas){
+    await apiPatch(`compras?id_compra=eq.${idCompra}`,{id_conta_financas:contaFinancas});
+    const integracao=await carregarIntegracaoFinancas('saida');
+    const titulos=await apiGet(`contas_pagar?select=*&id_compra=eq.${idCompra}&order=numero_parcela.asc`);
+    const vinculo=await vincularMovimentosFinancas('contas_pagar','id_conta_pagar',titulos,{ativa:true,tipo:'saida',contaId:contaFinancas,categoria:integracao.categoria,descricao:`Compra ${compra.codigo_compra||'#'+idCompra}`,documento:compra.codigo_compra});
+    if(!vinculo.ok){toast('Compra liberada, mas a integração financeira falhou: '+vinculo.message,'error');return;}
+  }
 
   document.getElementById('compra-liberar-modal')?.remove();
   toast('Entrada liberada, estoques atualizados e conta a pagar gerada.','success');
@@ -1064,7 +1080,8 @@ async function confirmarLiberacaoCompra(idCompra) {
 }
 
 async function desfazerLiberacaoCompra(compra) {
-  await apiDelete(`contas_pagar?id_compra=eq.${compra.id_compra}`);
+  const contasRemovidas=await apiDelete(`contas_pagar?id_compra=eq.${compra.id_compra}`);
+  if(!contasRemovidas)return {ok:false,message:'Não foi possível cancelar as contas no Vendas e no Finanças.'};
   if(compra?.status_compra !== 'LIBERADA') return { ok:true };
 
   const itens = await carregarItensCompra(compra.id_compra);
@@ -1160,7 +1177,7 @@ async function renderFormContaPagar(c) {
     <div class="form-actions">
       ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
-      ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
+      ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
       ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<button class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>') : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Voltar</button>
     </div>`;
