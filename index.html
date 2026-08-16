@@ -100,7 +100,7 @@
   .content-title{font-size:15px;font-weight:600;}
   .id-badge{font-family:var(--mono);font-size:11px;background:var(--surface2);color:var(--text2);padding:2px 8px;border-radius:4px;border:1px solid var(--border);}
   .content-sub{font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;}
-  .content-body{flex:1;min-width:0;max-width:100%;overflow-y:auto;overflow-x:hidden;padding:24px;}
+  .content-body{flex:1;min-width:0;max-width:100%;overflow-y:auto;overflow-x:auto;padding:24px;}
   .content-body::-webkit-scrollbar{width:4px;}
   .content-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
   .help-mobile-nav{display:none;}
@@ -249,16 +249,27 @@
     .main{grid-template-columns:1fr;}
     .sidebar{position:fixed;left:-100%;top:104px;bottom:0;width:85%;max-width:320px;z-index:200;}
     .sidebar.open{left:0;}
-    .form-grid{grid-template-columns:1fr;}
-    .venda-form .form-grid{grid-template-columns:1fr;}
-    .venda-form .form-grid.compact{grid-template-columns:1fr;}
-    .venda-form .form-group.wide{grid-column:1;}
+    .form-grid{grid-template-columns:1fr;gap:10px;}
+    .venda-form{font-size:12px;}
+    .venda-form .form-grid,
+    .venda-form .form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 6px;}
+    .venda-form .form-group.wide{grid-column:1/-1;}
     .form-group.full{grid-column:1;}
-    .content-body{width:100%;padding:12px;}
+    .venda-panel .form-group.full{grid-column:1/-1;}
+    .content-body{width:100%;padding:8px;overflow-x:auto;}
     .venda-form,.venda-panel,.venda-totais{width:100%;max-width:100%;min-width:0;}
     .venda-form .form-grid,.venda-form .form-group,.venda-form .form-input,.venda-form .form-select,.venda-form .form-textarea{min-width:0;max-width:100%;}
-    .venda-form .section-label{margin-top:12px;}
-    .produto-categoria-tabs{max-width:100%;}
+    .venda-form .form-group{gap:2px;}
+    .venda-form .form-label{font-size:9px;letter-spacing:.02em;white-space:normal;line-height:1.2;}
+    .venda-form .form-input,.venda-form .form-select,.venda-form .form-textarea{height:32px;padding:5px 6px;font-size:12px;line-height:1.2;}
+    .venda-form .form-textarea{height:auto;}
+    .venda-form .section-label{margin:10px 0 6px;padding-bottom:4px;font-size:10px;}
+    .venda-panel,.venda-totais{padding:7px;margin-bottom:8px;}
+    .produto-categoria-tabs{max-width:100%;gap:4px;padding-bottom:5px;}
+    .produto-categoria-tab{padding:4px 8px;font-size:10px;}
+    .venda-form .btn{padding:7px 10px;font-size:12px;}
+    .venda-totais>div{gap:8px;font-size:12px!important;}
+    .venda-totais span{min-width:0;overflow-wrap:anywhere;}
     .help-mobile-nav{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
     .content-header{padding:12px 16px;}
     .btn-voltar{display:block;}
