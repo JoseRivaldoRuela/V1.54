@@ -61,7 +61,7 @@ async function renderDashboard() {
         <span style="font-weight:700;font-family:var(--mono);">${fmt(soma(resumo.entregues))}</span>
       </div>
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px;">
-        <span style="color:var(--warn);font-weight:700;">Pendentes (${resumo.pendentes.length})</span>
+        <span style="color:var(--warn);font-weight:700;">Aguardando entrega (${resumo.pendentes.length})</span>
         <span style="font-weight:700;font-family:var(--mono);">${fmt(soma(resumo.pendentes))}</span>
       </div>
     </div>`;
@@ -149,7 +149,7 @@ async function renderDashboard() {
         </div>
       </div>
       <div class="dash-card red" onclick="filtrarVendasDash('pendente')">
-        <div class="dash-card-label">Entregas Pendentes</div>
+        <div class="dash-card-label">Vendas aguardando entrega</div>
         <div class="dash-card-value">${pendentes.length}</div>
         <div class="dash-card-sub">${fmt(soma(pendentes))}</div>
       </div>
@@ -470,7 +470,7 @@ function filtrarVendasDash(filtro) {
     });
     titulo='Vendas — '+mesRef.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
   }
-  else if(filtro==='pendente'){ vendFiltradas=items.filter(v=>v.status_entrega!=='ENTREGUE' && v.status_entrega!=='CANCELADO'); titulo='Entregas Pendentes'; }
+  else if(filtro==='pendente'){ vendFiltradas=items.filter(v=>v.status_entrega!=='ENTREGUE' && v.status_entrega!=='CANCELADO'); titulo='Vendas aguardando entrega'; }
   vendFiltradas = vendFiltradas.filter(v => v.status_entrega !== 'CANCELADO');
   mostrarDetalheVendas(vendFiltradas, titulo);
 }
@@ -1528,14 +1528,18 @@ async function getItensEstoqueVenda(idVenda) {
 
 async function ajustarEstoqueVenda(idVenda, operacao) {
   const itens = await getItensEstoqueVenda(idVenda);
-  if(!itens.length) return { ok:false, message:'Nenhum item encontrado para ajustar estoque.' };
+  if(!itens.length) return { ok:false, message:'A venda não possui itens acessíveis para ajustar o estoque. Confira se os produtos ainda existem nesta empresa.' };
 
   for(const item of itens) {
+    if(!item.id_produto || !Number.isFinite(item.quantidade) || item.quantidade <= 0) {
+      return { ok:false, message:`Item inválido no estoque: ${item.nome || 'produto sem identificação'}.` };
+    }
     const novoEstoque = operacao === 'baixar'
       ? item.estoque_atual - item.quantidade
       : item.estoque_atual + item.quantidade;
     const res = await apiPatch(`produtos?id_produto=eq.${item.id_produto}`,{estoque_atual:novoEstoque});
-    if(!res.ok) return { ok:false, message:res.data?.message || `Erro ao ajustar estoque de ${item.nome}.` };
+    if(!res.ok) return { ok:false, message:`Produto ${item.nome}: ${res.data?.message || 'a atualização foi recusada pelo banco.'}` };
+    if(!Array.isArray(res.data) || !res.data.length) return { ok:false, message:`Produto ${item.nome} não foi encontrado na empresa atual ou não pôde ser atualizado.` };
   }
 
   return { ok:true };
