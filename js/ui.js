@@ -2,13 +2,16 @@
 function toggleMenu(name) {
   document.querySelectorAll('.dropdown').forEach(d => { if(d.id!=='dd-'+name) d.classList.remove('open'); });
   document.querySelectorAll('.menu-btn').forEach(b => { if(b.id!=='mbtn-'+name) b.classList.remove('open'); });
-  document.getElementById('dd-'+name)?.classList.toggle('open');
-  document.getElementById('mbtn-'+name)?.classList.toggle('open');
+  const dropdown=document.getElementById('dd-'+name);
+  const aberto=dropdown?.classList.toggle('open')||false;
+  document.getElementById('mbtn-'+name)?.classList.toggle('open',aberto);
+  document.getElementById('menu-bar')?.classList.toggle('menu-open',aberto);
 }
 function closeMenus() {
   document.querySelectorAll('.dropdown').forEach(d=>d.classList.remove('open'));
   document.querySelectorAll('.menu-btn').forEach(b=>b.classList.remove('open'));
   document.querySelectorAll('.dropdown-submenu').forEach(s=>s.classList.remove('open'));
+  document.getElementById('menu-bar')?.classList.remove('menu-open');
 }
 function toggleSubmenu(e, id) {
   e.stopPropagation();
