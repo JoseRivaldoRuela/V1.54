@@ -7,7 +7,7 @@ let importadorTicketsState = {
 function renderImportadorTickets() {
   const body = document.getElementById('content-body');
   body.innerHTML = `
-    <div style="max-width:1180px;margin:0 auto;padding:18px;">
+    <div style="width:100%;max-width:1180px;margin:0 auto;padding:18px;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
         <div>
           <h2 style="margin:0 0 6px;color:var(--text);font-size:22px;">Importador de Tickets</h2>
@@ -29,7 +29,7 @@ function renderImportadorTickets() {
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;">
+      <div class="ticket-summary-grid">
         ${cardResumoImportador('Arquivos lidos', importadorTicketsState.tickets.length)}
         ${cardResumoImportador('Reconhecidos', importadorTicketsState.tickets.filter(t=>t.ok).length)}
         ${cardResumoImportador('Pendentes', importadorTicketsState.tickets.filter(t=>t.ok && !t.recebido).length)}
@@ -40,7 +40,7 @@ function renderImportadorTickets() {
         Nenhum arquivo selecionado.
       </div>
 
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+      <div class="responsive-table-wrap" style="border:1px solid var(--border);border-radius:8px;background:var(--surface);">
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
           <thead>
             <tr style="background:var(--surface2);color:var(--text2);">
@@ -608,4 +608,3 @@ function moeda(v) {
 function formatarDataCurta(iso) {
   return new Date(iso).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit' });
 }
-
