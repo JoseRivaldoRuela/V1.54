@@ -1015,8 +1015,8 @@ function removerItem(idx) {
 function renderItens() {
   const div = document.getElementById('lista-itens');
   if(!itensVenda.length){ div.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);">Nenhum item adicionado</div>'; return; }
-  div.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+  div.innerHTML = `<div class="venda-itens-wrap">
+    <table class="venda-itens-table">
       <thead><tr style="background:var(--surface2);">
         <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-weight:500;">Produto</th>
         <th style="padding:6px 8px;text-align:center;font-size:10px;color:var(--text2);font-weight:500;">Qtd</th>
