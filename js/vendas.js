@@ -1611,9 +1611,60 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
     return conta;
   });
 
-  await apiDelete(`contas_receber?id_venda=eq.${idVenda}`);
+  // Nunca apague o financeiro antes de ter um substituto valido. O fluxo antigo
+  // podia deixar uma venda ENTREGUE sem titulo quando o POST falhava depois do DELETE.
+  const existentesRes = await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc,id_conta.asc`);
+  if(!Array.isArray(existentesRes)) {
+    return {ok:false,data:{message:'Nao foi possivel conferir o financeiro existente da venda.'}};
+  }
+  const existentes = existentesRes;
+  const temBaixa = existentes.some(c => Number(c.valor_recebido||0)>0 || c.status_recebimento==='RECEBIDO');
+  if(temBaixa) {
+    // Uma edicao da venda nunca pode apagar recebimentos ja registrados.
+    return {ok:true,data:existentes,preservado:true};
+  }
+
+  const comuns = Math.min(existentes.length, contasData.length);
+  const atualizadas = [];
+  for(let idx=0; idx<comuns; idx++) {
+    const res = await apiPatch(`contas_receber?id_conta=eq.${existentes[idx].id_conta}`, contasData[idx]);
+    if(!res.ok || !Array.isArray(res.data) || !res.data.length) {
+      return {ok:false,data:{message:`Falha ao atualizar a parcela ${idx+1}. O titulo anterior foi preservado.`}};
+    }
+    atualizadas.push(res.data[0]);
+  }
+
+  let criadas = [];
+  if(existentes.length && contasData.length > existentes.length) {
+    const criacao = await apiPost('contas_receber', contasData.slice(existentes.length));
+    if(!criacao.ok) return criacao;
+    criadas = Array.isArray(criacao.data) ? criacao.data : [];
+  }
+
+  // Parcelas excedentes so sao removidas depois que as novas foram gravadas.
+  if(existentes.length > contasData.length) {
+    const excedentes = existentes.slice(contasData.length).map(c=>Number(c.id_conta)).filter(Boolean);
+    if(excedentes.length && !await apiDelete(`contas_receber?id_conta=in.(${excedentes.join(',')})`)) {
+      return {ok:false,data:{message:'As novas parcelas foram salvas, mas parcelas antigas excedentes nao puderam ser removidas.'}};
+    }
+  }
+
+  if(!existentes.length) {
+    const criacao = await apiPost('contas_receber', contasData);
+    if(!criacao.ok) return criacao;
+    criadas = Array.isArray(criacao.data) ? criacao.data : [];
+  }
+
+  // O sucesso so e informado depois de reler e validar quantidade e valor total.
+  const conferidas = await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc,id_conta.asc`);
+  const totalConferido = Array.isArray(conferidas)
+    ? conferidas.reduce((s,c)=>s+Number(c.valor_original||0),0)
+    : NaN;
+  if(!Array.isArray(conferidas) || conferidas.length!==totalParcelas || Math.abs(totalConferido-valorConta)>0.005) {
+    return {ok:false,data:{message:'O financeiro nao passou na conferencia final. A venda foi sinalizada para revisao.'}};
+  }
   invalidarResumoContasVendas();
-  return apiPost('contas_receber', contasData);
+  return {ok:true,data:conferidas.length?conferidas:[...atualizadas,...criadas]};
 }
 
 async function saveVenda() {

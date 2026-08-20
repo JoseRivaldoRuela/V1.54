@@ -77,7 +77,23 @@ async function vincularMovimentosFinancas(tabela,idCampo,titulos,config){
   try{
     for(const titulo of titulos){
       if(titulo.id_movimento_financas)continue;
-      const id=await criarMovimentoFinancas({tipo:config.tipo,contaId:config.contaId,categoriaId:config.categoria.id_categoria,valor:titulo.valor_original,descricao:config.descricao,dataVencimento:String(titulo.data_vencimento).slice(0,10),documento:config.documento,observacoes:titulo.observacoes});
+      // Reaproveita um movimento orfao de tentativa anterior. Isso fecha a
+      // janela em que o Financas era gravado, mas o vinculo local falhava.
+      const vencimento=String(titulo.data_vencimento).slice(0,10);
+      const documento=String(config.documento||'').trim();
+      let id=null;
+      if(documento){
+        const candidatos=await financasRequest(`movimentos?select=id_movimento,id_conta,valor,status,documento,data_vencimento&tipo=eq.${encodeURIComponent(config.tipo)}&documento=eq.${encodeURIComponent(documento)}&status=neq.cancelado&order=id_movimento.desc`);
+        const usados=await apiGet(`${tabela}?select=id_movimento_financas&id_movimento_financas=not.is.null`);
+        const idsUsados=new Set((Array.isArray(usados)?usados:[]).map(x=>Number(x.id_movimento_financas)).filter(Boolean));
+        const orfao=(Array.isArray(candidatos)?candidatos:[]).find(m=>
+          !idsUsados.has(Number(m.id_movimento)) &&
+          Math.abs(Number(m.valor||0)-Number(titulo.valor_original||0))<=0.005 &&
+          String(m.data_vencimento||'').slice(0,10)===vencimento
+        );
+        if(orfao)id=Number(orfao.id_movimento)||null;
+      }
+      if(!id)id=await criarMovimentoFinancas({tipo:config.tipo,contaId:config.contaId,categoriaId:config.categoria.id_categoria,valor:titulo.valor_original,descricao:config.descricao,dataVencimento:vencimento,documento:config.documento,observacoes:titulo.observacoes});
       if(!id)throw new Error('O Finanças não retornou o identificador do movimento.');
       const salvo=await apiPatch(`${tabela}?${idCampo}=eq.${titulo[idCampo]}`,{id_conta_financas:Number(config.contaId),id_movimento_financas:id});
       if(!salvo.ok)throw new Error('Não foi possível vincular o movimento ao título local.');
