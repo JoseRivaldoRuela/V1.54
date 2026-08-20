@@ -43,8 +43,7 @@ async function saveUsuario() {
       const res=await r.json();
       if(r.ok&&res?.ok!==false){
         toast('Usuário cadastrado!','success');
-        await loadItems();
-        if(res.id_usuario) openItem(res.id_usuario);
+        await finalizarCadastroNovo();
       } else {
         toast('Erro: '+(res?.message||'username já existe'),'error');
         btn.disabled=false; btn.textContent='+ Cadastrar Usuário';
@@ -60,6 +59,7 @@ async function saveUsuario() {
       }
       const{ok,data:res}=await apiPatch(`usuarios?id_usuario=eq.${currentId}`,{nome,username,email:email||null,admin,ativo});
       if(ok){
+        formularioAlterado=false;
         toast('Usuário atualizado!','success');
         await loadItems();
         openItem(currentId);

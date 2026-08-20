@@ -55,9 +55,13 @@ async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
   if(!m)return;
   const receber=tabela==='contas_receber';
   const statusLocal=receber?titulo.status_recebimento:titulo.status_pagamento;
-  const status=statusLocal===(receber?'RECEBIDO':'PAGO')?'efetivado':statusLocal==='CANCELADO'?'cancelado':'pendente';
+  const valorOriginal=Number(titulo.valor_original??m.valor);
+  const valorBaixado=Math.max(0,Number(receber?titulo.valor_recebido:titulo.valor_pago)||0);
+  const cancelado=statusLocal==='CANCELADO';
+  const status=cancelado?'cancelado':valorBaixado>0.005?'efetivado':'pendente';
+  const valorMovimento=!cancelado&&valorBaixado>0.005?Math.min(valorOriginal,valorBaixado):valorOriginal;
   const dataBaixa=receber?titulo.data_recebimento:titulo.data_pagamento;
-  await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({p_id_movimento:m.id_movimento,p_id_conta:Number(titulo.id_conta_financas||m.id_conta),p_id_conta_destino:null,p_tipo:receber?'entrada':'saida',p_valor:Number(titulo.valor_original??m.valor),p_descricao:m.descricao,p_data_movimento:m.data_movimento,p_data_vencimento:String(titulo.data_vencimento||m.data_vencimento||m.data_movimento).slice(0,10),p_data_efetivacao:String(dataBaixa||titulo.data_vencimento||m.data_efetivacao||m.data_movimento).slice(0,10),p_id_categoria:m.id_categoria||null,p_status:status,p_documento:m.documento||null,p_observacoes:titulo.observacoes||m.observacoes||null})});
+  await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({p_id_movimento:m.id_movimento,p_id_conta:Number(titulo.id_conta_financas||m.id_conta),p_id_conta_destino:null,p_tipo:receber?'entrada':'saida',p_valor:valorMovimento,p_descricao:m.descricao,p_data_movimento:m.data_movimento,p_data_vencimento:String(titulo.data_vencimento||m.data_vencimento||m.data_movimento).slice(0,10),p_data_efetivacao:String(dataBaixa||titulo.data_vencimento||m.data_efetivacao||m.data_movimento).slice(0,10),p_id_categoria:m.id_categoria||null,p_status:status,p_documento:m.documento||null,p_observacoes:titulo.observacoes||m.observacoes||null})});
 }
 
 async function cancelarMovimentosFinancas(titulos){

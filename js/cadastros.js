@@ -58,11 +58,11 @@ async function saveCadastro() {
   }
   if(isNew){
     const{ok,data:res}=await apiPost(cfg.table,data);
-    if(ok){toast(cfg.label+' cadastrado!','success');await loadItems();const n=Array.isArray(res)?res[0]:res;if(n)openItem(n[cfg.id]);}
+    if(ok){toast(cfg.label+' cadastrado!','success');await finalizarCadastroNovo();}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='+ Cadastrar';}
   } else {
     const{ok,data:res}=await apiPatch(`${cfg.table}?${cfg.id}=eq.${currentId}`,data);
-    if(ok){toast('Salvo!','success');await loadItems();openItem(currentId);}
+    if(ok){formularioAlterado=false;toast('Salvo!','success');await loadItems();openItem(currentId);}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='✓ Salvar';}
   }
 }

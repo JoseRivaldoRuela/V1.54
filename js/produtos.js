@@ -1,3 +1,23 @@
+function textoOrdenacaoCadastro(valor) {
+  return String(valor??'').trim();
+}
+
+function compararCadastroAlfabetico(a,b) {
+  return textoOrdenacaoCadastro(a).localeCompare(textoOrdenacaoCadastro(b),'pt-BR',{sensitivity:'base',numeric:true,ignorePunctuation:true});
+}
+
+function ordenarCadastro(lista,nome) {
+  return [...(Array.isArray(lista)?lista:[])].sort((a,b)=>compararCadastroAlfabetico(nome(a),nome(b)));
+}
+
+function nomeClienteCadastro(c) {
+  return c?.nome_fantasia||c?.razao_social||'';
+}
+
+function nomeFornecedorCadastro(f) {
+  return f?.nome_fantasia||f?.razao_social||'';
+}
+
 function renderFormTipo(c) {
   const v=f=>c?(c[f]??''):'';
   document.getElementById('content-body').innerHTML=`
@@ -17,11 +37,11 @@ async function saveTipo() {
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
   if(isNew){
     const{ok,data:res}=await apiPost('tipo_mercadoria',{descricao:desc});
-    if(ok){toast('Tipo cadastrado!','success');await loadItems();await loadCaches();const n=Array.isArray(res)?res[0]:res;if(n)openItem(n.id_tipo);}
+    if(ok){toast('Tipo cadastrado!','success');await loadCaches();await finalizarCadastroNovo();}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='+ Cadastrar';}
   } else {
     const{ok}=await apiPatch(`tipo_mercadoria?id_tipo=eq.${currentId}`,{descricao:desc});
-    if(ok){toast('Salvo!','success');await loadItems();await loadCaches();openItem(currentId);}
+    if(ok){formularioAlterado=false;toast('Salvo!','success');await loadItems();await loadCaches();openItem(currentId);}
     else{toast('Erro','error');btn.disabled=false;btn.textContent='✓ Salvar';}
   }
 }
@@ -34,11 +54,11 @@ async function loadCaches() {
     apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo,id_tipo,tipo_mercadoria(descricao)&ativo=eq.true&order=nome_mercadoria.asc'),
     apiGet('clientes?select=*&order=razao_social.asc')
   ]);
-  if(Array.isArray(t)) cacheTipos=t;
-  if(Array.isArray(f)) cacheFornecedores=f;
+  if(Array.isArray(t)) cacheTipos=ordenarCadastro(t,x=>x.descricao);
+  if(Array.isArray(f)) cacheFornecedores=ordenarCadastro(f,nomeFornecedorCadastro);
   else { cacheFornecedores=[]; console.error('Erro ao carregar fornecedores:',f); }
-  if(Array.isArray(p)) cacheProdutos=p;
-  if(Array.isArray(c)) cacheClientes=c;
+  if(Array.isArray(p)) cacheProdutos=ordenarCadastro(p,x=>x.nome_mercadoria);
+  if(Array.isArray(c)) cacheClientes=ordenarCadastro(c,nomeClienteCadastro);
 }
 
 function categoriaProdutoPedido(produto) {
@@ -958,7 +978,7 @@ async function saveProduto() {
   const data={nome_mercadoria:nome,id_tipo:parseInt(id_tipo),id_fornecedor:document.getElementById('f-id_fornecedor').value?parseInt(document.getElementById('f-id_fornecedor').value):null,unidade:document.getElementById('f-unidade').value||null,estoque_atual:parseFloat(document.getElementById('f-estoque_atual').value)||0,quantidade_fardo:Number.isFinite(qtdFardo)&&qtdFardo>0?qtdFardo:null,preco_custo:parseFloat(custo),preco_venda:parseFloat(venda),observacoes:document.getElementById('f-observacoes').value.trim()||null,ativo:document.getElementById('f-ativo').checked};
   if(isNew){
     const{ok,data:res}=await apiPost('produtos',data);
-    if(ok){toast('Produto cadastrado!','success');await loadItems();await loadCaches();const n=Array.isArray(res)?res[0]:res;if(n)openItem(n.id_produto);}
+    if(ok){toast('Produto cadastrado!','success');await loadCaches();await finalizarCadastroNovo();}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='+ Cadastrar';}
   } else {
     const produtoAnterior = items.find(p=>Number(p.id_produto)===Number(currentId)) || {};
@@ -997,7 +1017,7 @@ async function saveProduto() {
       } else {
         toast('Salvo!','success');
       }
-      await loadItems();await loadCaches();openItem(currentId);
+      formularioAlterado=false;await loadItems();await loadCaches();openItem(currentId);
     }
     else{toast('Erro','error');btn.disabled=false;btn.textContent='Salvar';}
   }
@@ -1076,11 +1096,11 @@ async function savePreco() {
   const data={id_cliente:parseInt(id_cli),id_produto:parseInt(id_prod),preco_especial:parseFloat(preco),observacoes:document.getElementById('f-observacoes').value.trim()||null};
   if(isNew){
     const{ok,data:res}=await apiPost('produtos_precos_especiais',data);
-    if(ok){toast('Preço especial cadastrado!','success');await loadItems();const n=Array.isArray(res)?res[0]:res;if(n)openItem(n.id_preco_especial);}
+    if(ok){toast('Preço especial cadastrado!','success');await finalizarCadastroNovo();}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='+ Cadastrar';}
   } else {
     const{ok}=await apiPatch(`produtos_precos_especiais?id_preco_especial=eq.${currentId}`,data);
-    if(ok){toast('Salvo!','success');await loadItems();openItem(currentId);}
+    if(ok){formularioAlterado=false;toast('Salvo!','success');await loadItems();openItem(currentId);}
     else{toast('Erro','error');btn.disabled=false;btn.textContent='✓ Salvar';}
   }
 }

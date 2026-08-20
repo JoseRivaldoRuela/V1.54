@@ -130,13 +130,27 @@ async function renderDashboardContasPagar() {
   const somaAberto = arr => arr.reduce((s,c)=>s+contaPagarAberto(c),0);
   const somaPago = arr => arr.reduce((s,c)=>s+Number(c.valor_pago||c.valor_original||0),0);
   const dias = parseInt(contasPagarDashPeriodo || '7', 10);
-  const labels = [], valoresPagos = [], valoresPagar = [];
+  const labels = [], valoresPagos = [], valoresPagar = [], fornecedoresPagos = [], fornecedoresPagar = [];
+  const detalharFornecedores = (lista, pago=false) => {
+    const agrupado=new Map();
+    lista.forEach(c=>{
+      const fornecedor=cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c.id_fornecedor));
+      const nome=fornecedor?.nome_fantasia||fornecedor?.razao_social||`Fornecedor #${c.id_fornecedor||'-'}`;
+      const valor=pago?Number(c.valor_pago||c.valor_original||0):contaPagarAberto(c);
+      agrupado.set(nome,(agrupado.get(nome)||0)+valor);
+    });
+    return [...agrupado.entries()].sort((a,b)=>b[1]-a[1]).map(([nome,valor])=>`${nome}: ${compraFmt(valor)}`);
+  };
   for(let i=dias-1; i>=0; i--) {
     const d = new Date(hoje.getTime()-i*864e5);
     const data = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const pendentesDia=pendentes.filter(c=>String(c.data_vencimento||'').slice(0,10)===data);
+    const pagasDia=pagas.filter(c=>String(c.data_pagamento||'').slice(0,10)===data);
     labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
-    valoresPagar.push(somaAberto(pendentes.filter(c=>String(c.data_vencimento||'').slice(0,10)===data)));
-    valoresPagos.push(somaPago(pagas.filter(c=>String(c.data_pagamento||'').slice(0,10)===data)));
+    valoresPagar.push(somaAberto(pendentesDia));
+    valoresPagos.push(somaPago(pagasDia));
+    fornecedoresPagar.push(detalharFornecedores(pendentesDia));
+    fornecedoresPagos.push(detalharFornecedores(pagasDia,true));
   }
   const card = (filtro, label, valor, qtd, cor) => `
     <button class="dash-card" onclick="listarContasPagarDash('${filtro}')" style="text-align:left;cursor:pointer;">
@@ -183,10 +197,10 @@ async function renderDashboardContasPagar() {
     chartContasPagar = new Chart(ctx, {
       type:'line',
       data:{ labels, datasets:[
-        {label:'A pagar',data:valoresPagar,borderColor:'#ffa500',backgroundColor:'rgba(255,165,0,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35},
-        {label:'Pago',data:valoresPagos,borderColor:'#00e5a0',backgroundColor:'rgba(0,229,160,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35}
+        {label:'A pagar',data:valoresPagar,fornecedoresPorPonto:fornecedoresPagar,borderColor:'#ffa500',backgroundColor:'rgba(255,165,0,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35},
+        {label:'Pago',data:valoresPagos,fornecedoresPorPonto:fornecedoresPagos,borderColor:'#00e5a0',backgroundColor:'rgba(0,229,160,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:.35}
       ]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#8888a0',font:{size:11},padding:12}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${compraFmt(ctx.raw)}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11},callback:v=>'R$ '+Number(v).toLocaleString('pt-BR')}}}}
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#8888a0',font:{size:11},padding:12}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${compraFmt(ctx.raw)}`,afterLabel:ctx=>ctx.dataset.fornecedoresPorPonto?.[ctx.dataIndex]||[]}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8888a0',font:{size:11},callback:v=>'R$ '+Number(v).toLocaleString('pt-BR')}}}}
     });
   }, 100);
 }
@@ -854,8 +868,7 @@ async function saveCompra() {
       return;
     }
     toast('Compra registrada. Libere a entrada para atualizar estoque e financeiro.','success');
-    await loadItems();
-    openItem(n.id_compra);
+    await finalizarCadastroNovo();
   } else {
     const compra = items.find(x=>Number(x.id_compra)===Number(currentId));
     if(compra?.status_compra === 'LIBERADA') { toast('Reabra a compra antes de alterar.','error'); return; }
@@ -864,6 +877,7 @@ async function saveCompra() {
     const itensRes = await salvarItensCompra(currentId);
     if(!itensRes.ok){ toast('Erro ao salvar itens: '+(itensRes.data?.message||'erro'),'error'); if(btn){btn.disabled=false;btn.textContent='✓ Salvar Alterações';} return; }
     toast('Compra atualizada.','success');
+    formularioAlterado=false;
     await loadItems();
     openItem(currentId);
   }
@@ -1151,6 +1165,7 @@ async function renderFormContaPagar(c) {
   const statusOpts = ['PENDENTE','PAGO','CANCELADO'].map(s=>`<option value="${s}" ${v('status_pagamento')===s?'selected':''}>${s}</option>`).join('');
   const vencimentoManual = v('data_vencimento') || compraDateInput(new Date());
   const origemCompra=!!c?.id_compra;
+  const valorPagoAtual=Number(c?.valor_pago||0);
   document.getElementById('content-body').innerHTML = `
     <div class="section-label"><span>Conta a Pagar · Parcela ${rotuloParcela(c)} · Total ${contasFmtMoeda(valorTotalParcelas(c,'pagar'))}</span></div>
     <div class="form-grid">
@@ -1178,7 +1193,9 @@ async function renderFormContaPagar(c) {
       ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
       ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
-      ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<button class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>') : ''}
+      ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">Pago</span>') : ''}
+      ${valorPagoAtual > 0.005 || c?.status_pagamento==='PAGO' ? '<button type="button" class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>' : ''}
+      ${c?.id_compra ? `<button class="btn btn-secondary" onclick="mostrarResumoCompraConta(${c.id_compra},event)">Resumo da compra</button>` : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Voltar</button>
     </div>`;
 }
@@ -1248,7 +1265,7 @@ async function saveContaPagar() {
       return {...data,id_compra:null,grupo_parcelamento:grupo,numero_parcela:idx+1,total_parcelas:qtd,valor_total_titulo:total,data_vencimento:compraAddDays(data.data_vencimento,idx*dias),valor_original:valor,valor_pago:data.status_pagamento==='PAGO'?valor:null,observacoes:data.observacoes};
     });
     const criado=await apiPost('contas_pagar',registros.map(({data_pagamento,...registro})=>registro));
-    if(criado.ok){toast(qtd>1?`${qtd} contas a pagar criadas!`:'Conta a pagar criada!','success');await loadItems();const primeira=Array.isArray(criado.data)?criado.data[0]:criado.data;if(primeira)openItem(primeira.id_conta_pagar);}
+    if(criado.ok){toast(qtd>1?`${qtd} contas a pagar criadas!`:'Conta a pagar criada!','success');await finalizarCadastroNovo();}
     else toast('Erro ao criar conta: '+([criado.data?.message,criado.data?.details,criado.data?.hint].filter(Boolean).join(' - ')||'erro'),'error');
     return;
   }
@@ -1256,22 +1273,54 @@ async function saveContaPagar() {
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,data);
   if(!res.ok){ toast('Erro ao salvar conta: '+(res.data?.message||'erro'),'error'); return; }
   toast('Conta atualizada.','success');
+  formularioAlterado=false;
   await loadItems();
   openItem(currentId);
 }
 
 async function marcarContaPagarPaga() {
   const valor = Number(document.getElementById('f-valor_pago')?.value||0) || Number(document.getElementById('f-valor_original')?.value||0);
+  const dataInformada = document.getElementById('f-data_pagamento')?.value;
+  const dataPagamento = dataInformada ? new Date(dataInformada) : new Date();
+  if(Number.isNaN(dataPagamento.getTime())) { toast('Informe uma data de pagamento válida.','error'); return; }
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{
     status_pagamento:'PAGO',
     valor_pago: valor,
-    data_pagamento: new Date().toISOString(),
+    data_pagamento: dataPagamento.toISOString(),
     meio_pagamento: document.getElementById('f-meio_pagamento')?.value||null
   });
   if(!res.ok){ toast('Erro ao marcar como pago.','error'); return; }
   toast('Pagamento confirmado.','success');
   await loadItems();
   openItem(currentId);
+}
+
+async function marcarContaPagarPagaRapido(idConta, event) {
+  event?.stopPropagation();
+  const botao = event?.currentTarget;
+  const conta = items.find(c=>Number(c.id_conta_pagar)===Number(idConta));
+  const original = Number(conta?.valor_original||0);
+  const pagoAtual = Math.min(original, Math.max(0, Number(conta?.valor_pago||0)));
+  const saldo = Math.max(0, original-pagoAtual);
+  if(!conta || saldo<=0.005 || conta.status_pagamento==='PAGO') { toast('Esta conta já está paga.','info'); return; }
+  const fornecedor = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(conta.id_fornecedor));
+  const nome = fornecedor?.nome_fantasia || fornecedor?.razao_social || `Conta #${idConta}`;
+  if(!confirm(`Marcar como pago ${compraFmt(saldo)} de ${nome}?`)) return;
+  if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
+  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${idConta}`,{
+    status_pagamento:'PAGO',
+    valor_pago:original,
+    data_pagamento:new Date().toISOString(),
+    meio_pagamento:conta.meio_pagamento||null
+  });
+  if(!res.ok) {
+    if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
+    toast('Erro ao marcar como pago: '+(res.data?.message||'erro'),'error');
+    return;
+  }
+  toast(`Pagamento confirmado: ${compraFmt(saldo)}.`,'success');
+  currentId=null;
+  await renderDashboardContasPagar();
 }
 
 async function reativarContaPagar() {

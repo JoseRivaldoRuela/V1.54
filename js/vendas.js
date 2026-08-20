@@ -529,7 +529,7 @@ function mostrarDetalheVendas(vendas, titulo) {
 
 async function loadCacheCobrancas() {
   const r = await apiGet('tipo_cobranca?select=id_cobranca,descricao&order=descricao.asc');
-  if(Array.isArray(r)) cacheCobrancas = r;
+  if(Array.isArray(r)) cacheCobrancas = ordenarCadastro(r,x=>x.descricao);
 }
 
 function pad2(n) {
@@ -657,7 +657,7 @@ async function renderFormVenda(c) {
         quantidade_fardo: i.produtos?.quantidade_fardo || null,
         quantidade: Number(i.quantidade),
         preco_unitario: Number(i.preco_unitario),
-        desconto_item: Number(i.desconto_item||0),
+        desconto_item: Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0,
         subtotal: Number(i.subtotal),
         preco_custo: Number(i.produtos?.preco_custo||0)
       }));
@@ -754,10 +754,6 @@ async function renderFormVenda(c) {
         <label class="form-label">Vencimento</label>
         <input class="form-input" type="date" id="f-data_vencimento" value="${dataVencimentoDefault}"/>
       </div>
-      <div class="form-group">
-        <label class="form-label">Desconto Total (R$)</label>
-        <input class="form-input" type="number" step="0.01" id="f-desconto_total" value="${v('desconto_total')||'0'}" oninput="calcTotais()"/>
-      </div>
     </div>
 
     <div class="section-label">
@@ -784,7 +780,7 @@ async function renderFormVenda(c) {
           <input class="form-input" type="number" step="0.01" id="item-preco" value="" placeholder="0,00" oninput="calcItemSubtotal()"/>
         </div>
         <div class="form-group">
-          <label class="form-label">Desconto Item (R$)</label>
+          <label class="form-label">Desconto por Unidade (R$)</label>
           <input class="form-input" type="number" step="0.01" id="item-desconto" value="0" oninput="calcItemSubtotal()"/>
         </div>
         <div class="form-group">
@@ -800,10 +796,21 @@ async function renderFormVenda(c) {
 
     <!-- Totais -->
     <div class="venda-totais">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;color:var(--text2);">
-        <span>Subtotal produtos:</span><span id="total-produtos">R$ 0,00</span>
+      <div class="form-group" style="margin-bottom:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;">
+        <label class="form-label" for="f-desconto_total" style="font-size:12px;font-weight:700;">Desconto adicional no pedido (R$)</label>
+        <input class="form-input" type="text" inputmode="decimal" id="f-desconto_total" value="${v('desconto_total')||'0'}" placeholder="Ex.: 20,00" oninput="calcTotais()" style="font-size:18px;font-weight:700;"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px;">Digite aqui o desconto dado sobre o pedido inteiro. Ele será somado aos descontos por unidade dos itens.</div>
       </div>
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;color:var(--text2);">
+        <span>Total bruto dos produtos:</span><span id="total-produtos">R$ 0,00</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;color:var(--text2);">
+        <span>Descontos nos itens:</span><span id="total-desconto-itens" style="color:var(--danger);">- R$ 0,00</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;color:var(--text2);">
+        <span>Desconto no pedido:</span><span id="total-desconto-pedido" style="color:var(--danger);">- R$ 0,00</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;font-weight:600;color:var(--text2);">
         <span>Desconto total:</span><span id="total-desconto" style="color:var(--danger);">- R$ 0,00</span>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:600;border-top:1px solid var(--border);padding-top:10px;margin-top:4px;">
@@ -937,7 +944,7 @@ function calcItemSubtotal() {
   const qty = numeroVenda(document.getElementById('item-qty')?.value);
   const preco = numeroVenda(document.getElementById('item-preco')?.value);
   const desc = numeroVenda(document.getElementById('item-desconto')?.value);
-  const sub = (qty * preco) - desc;
+  const sub = qty * (preco - desc);
   const el = document.getElementById('item-subtotal');
   if(el) el.value = 'R$ ' + Math.max(0,sub).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
@@ -954,8 +961,10 @@ function adicionarItem() {
   if(!idProd){ toast('Selecione um produto','error'); return; }
   if(qty<=0){ toast('Quantidade deve ser maior que zero','error'); return; }
   if(preco<=0){ toast('Preço deve ser maior que zero','error'); return; }
+  if(desc<0){toast('O desconto do item não pode ser negativo.','error');return;}
+  if(desc>preco+0.005){toast('O desconto por unidade não pode ser maior que o preço unitário.','error');return;}
 
-  const subtotal = Math.max(0,(qty*preco)-desc);
+  const subtotal = Math.max(0,qty*(preco-desc));
   const prodCache = cacheProdutos.find(p=>String(p.id_produto)===String(idProd));
   const precoCusto = prodCache ? Number(prodCache.preco_custo||0) : 0;
   const itemAtualizado = {
@@ -1022,7 +1031,7 @@ function renderItens() {
         <th style="padding:6px 8px;text-align:center;font-size:10px;color:var(--text2);font-weight:500;">Qtd</th>
         <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Custo</th>
         <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Preço</th>
-        <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Desc</th>
+        <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Desc./un.</th>
         <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Subtotal</th>
         <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-weight:500;">Lucro</th>
         <th style="padding:6px 8px;text-align:center;font-size:10px;color:var(--text2);font-weight:500;"></th>
@@ -1050,15 +1059,20 @@ function renderItens() {
 }
 
 function calcTotais() {
-  const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
+  const totalBruto = itensVenda.reduce((s,i)=>s+(Number(i.quantidade||0)*Number(i.preco_unitario||0)),0);
+  const descontoItens = itensVenda.reduce((s,i)=>s+(Number(i.quantidade||0)*Math.max(0,Number(i.desconto_item||0))),0);
+  const totalProd = Math.max(0,totalBruto-descontoItens);
   const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
   const totalCusto = totalCustoCalculado;
-  const desconto = parseFloat(document.getElementById('f-desconto_total')?.value||0);
-  const final = Math.max(0,totalProd-desconto);
+  const descontoPedido = Math.max(0,numeroVenda(document.getElementById('f-desconto_total')?.value));
+  const descontoTotal = descontoItens+descontoPedido;
+  const final = Math.max(0,totalProd-descontoPedido);
   const lucro = final - totalCusto;
   const fmt = n=>'R$ '+n.toFixed(2);
-  const elProd=document.getElementById('total-produtos'); if(elProd) elProd.textContent=fmt(totalProd);
-  const elDesc=document.getElementById('total-desconto'); if(elDesc) elDesc.textContent='- '+fmt(desconto);
+  const elProd=document.getElementById('total-produtos'); if(elProd) elProd.textContent=fmt(totalBruto);
+  const elDescItens=document.getElementById('total-desconto-itens'); if(elDescItens) elDescItens.textContent='- '+fmt(descontoItens);
+  const elDescPedido=document.getElementById('total-desconto-pedido'); if(elDescPedido) elDescPedido.textContent='- '+fmt(descontoPedido);
+  const elDesc=document.getElementById('total-desconto'); if(elDesc) elDesc.textContent='- '+fmt(descontoTotal);
   const elFinal=document.getElementById('total-final'); if(elFinal) elFinal.textContent=fmt(final);
   const elCusto=document.getElementById('total-custo'); if(elCusto) elCusto.textContent=fmt(totalCusto);
   const elLucro=document.getElementById('total-lucro');
@@ -1072,13 +1086,14 @@ async function imprimirTicketVenda(idVenda) {
   const venda = items.find(v=>Number(v.id_venda)===Number(idVenda));
   if(!venda){ toast('Venda não encontrada para impressão.','error'); return; }
 
-  const itens = itensVenda.length ? itensVenda : await apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`);
+  const itensBanco=itensVenda.length?null:await apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`);
+  const itens=itensVenda.length?itensVenda:(Array.isArray(itensBanco)?itensBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensBanco);
   if(!Array.isArray(itens) || !itens.length){ toast('Venda sem itens para impressão.','error'); return; }
 
   const cliente = venda.clientes?.nome_fantasia || venda.clientes?.razao_social || `Cliente #${venda.id_cliente}`;
   const fmt = n => 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
   const subtotal = itens.reduce((s,i)=>s+(Number(i.quantidade||0)*Number(i.preco_unitario||0)),0);
-  const descontoItens = itens.reduce((s,i)=>s+Number(i.desconto_item||0),0);
+  const descontoItens = itens.reduce((s,i)=>s+(Number(i.quantidade||0)*Number(i.desconto_item||0)),0);
   const descontoVenda = Number(venda.desconto_total||0);
   const desconto = descontoItens + descontoVenda;
   const valorFinalBanco = Number(venda.valor_final);
@@ -1088,7 +1103,7 @@ async function imprimirTicketVenda(idVenda) {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
     const qtd = Number(i.quantidade||0);
     const preco = Number(i.preco_unitario||0);
-    const sub = Number(i.subtotal || ((qtd*preco)-Number(i.desconto_item||0)));
+    const sub = Number(i.subtotal || (qtd*(preco-Number(i.desconto_item||0))));
     return `- ${nome} | Qtd: ${qtd} | Unit: ${fmt(preco)} | Total: ${fmt(sub)}`;
   }).join('\n');
   const ticketTexto = [
@@ -1103,7 +1118,9 @@ async function imprimirTicketVenda(idVenda) {
     itensTexto,
     '',
     `Subtotal: ${fmt(subtotal)}`,
-    `Desconto: ${fmt(desconto)}`,
+    `Descontos nos itens: ${fmt(descontoItens)}`,
+    `Desconto no pedido: ${fmt(descontoVenda)}`,
+    `Desconto total: ${fmt(desconto)}`,
     `Total: ${fmt(total)}`,
     venda.observacoes ? `Observações: ${venda.observacoes}` : ''
   ].filter(Boolean).join('\n');
@@ -1116,6 +1133,8 @@ async function imprimirTicketVenda(idVenda) {
     entrega: venda.data_entrega ? new Date(venda.data_entrega).toLocaleString('pt-BR') : 'Pendente',
     pagamento: `${venda.meio_pagamento||'-'} - ${statusFin}`,
     subtotal: fmt(subtotal),
+    descontoItens: fmt(descontoItens),
+    descontoPedido: fmt(descontoVenda),
     desconto: fmt(desconto),
     total: fmt(total),
     observacoes: venda.observacoes || '',
@@ -1124,7 +1143,7 @@ async function imprimirTicketVenda(idVenda) {
       const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
       const qtd = Number(i.quantidade||0);
       const preco = Number(i.preco_unitario||0);
-      const sub = Number(i.subtotal || ((qtd*preco)-Number(i.desconto_item||0)));
+      const sub = Number(i.subtotal || (qtd*(preco-Number(i.desconto_item||0))));
       return { nome, qtd, preco: fmt(preco), total: fmt(sub) };
     })
   };
@@ -1132,7 +1151,7 @@ async function imprimirTicketVenda(idVenda) {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
     const qtd = Number(i.quantidade||0);
     const preco = Number(i.preco_unitario||0);
-    const sub = Number(i.subtotal || ((qtd*preco)-Number(i.desconto_item||0)));
+    const sub = Number(i.subtotal || (qtd*(preco-Number(i.desconto_item||0))));
     return `<tr><td>${nome}</td><td>${qtd}</td><td>${fmt(preco)}</td><td>${fmt(sub)}</td></tr>`;
   }).join('');
 
@@ -1210,7 +1229,7 @@ async function imprimirTicketVenda(idVenda) {
             const linhas = wrapText(temp, item.nome, 430);
             y += Math.max(40, linhas.length * 30) + 14;
           });
-          y += 30 + 4 * 38 + (ticketData.observacoes ? 90 : 0) + 80;
+          y += 30 + 6 * 38 + (ticketData.observacoes ? 90 : 0) + 80;
           const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = Math.max(1180, y);
@@ -1274,7 +1293,9 @@ async function imprimirTicketVenda(idVenda) {
           drawLine(ctx, pad, width-pad, cy);
           cy += 26;
           row('Subtotal', ticketData.subtotal);
-          row('Desconto', ticketData.desconto);
+          row('Desc. itens', ticketData.descontoItens);
+          row('Desc. pedido', ticketData.descontoPedido);
+          row('Desc. total', ticketData.desconto);
           ctx.font = 'bold 34px Arial';
           ctx.textAlign = 'left';
           ctx.fillText('Total', pad, cy);
@@ -1380,7 +1401,9 @@ async function imprimirTicketVenda(idVenda) {
           });
           linha();
           txt('Subtotal: ' + ticketData.subtotal + '\\n');
-          txt('Desconto: ' + ticketData.desconto + '\\n');
+          txt('Desc. itens: ' + ticketData.descontoItens + '\\n');
+          txt('Desc. pedido: ' + ticketData.descontoPedido + '\\n');
+          txt('Desc. total: ' + ticketData.desconto + '\\n');
           add([0x1b,0x45,0x01]);
           txt('Total: ' + ticketData.total + '\\n');
           add([0x1b,0x45,0x00]);
@@ -1466,7 +1489,9 @@ async function imprimirTicketVenda(idVenda) {
         </table>
         <div class="sep"></div>
         <div class="row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-        <div class="row"><span>Desconto</span><span>${fmt(desconto)}</span></div>
+        <div class="row"><span>Descontos nos itens</span><span>${fmt(descontoItens)}</span></div>
+        <div class="row"><span>Desconto no pedido</span><span>${fmt(descontoVenda)}</span></div>
+        <div class="row"><strong>Desconto total</strong><strong>${fmt(desconto)}</strong></div>
         <div class="row total"><span>Total</span><span>${fmt(total)}</span></div>
         ${venda.observacoes?`<div class="sep"></div><strong>Observações</strong><div class="obs">${venda.observacoes}</div>`:''}
         <div class="sep"></div>
@@ -1496,7 +1521,7 @@ function buildVendaItensPayload(vendaId, itens = itensVenda) {
     id_produto: Number(item.id_produto),
     quantidade: Number(item.quantidade),
     preco_unitario: Number(item.preco_unitario),
-    desconto_item: Number(item.desconto_item||0)
+    desconto_item: Number(item.quantidade||0)*Number(item.desconto_item||0)
   }));
 }
 
@@ -1603,12 +1628,12 @@ async function saveVenda() {
   const diasParcelasForm=Math.max(0,parseInt(document.getElementById('f-dias_vencimento').value||'0',10)||0);
   if(quantidadeParcelasForm>1&&diasParcelasForm===0){toast('Informe um intervalo em dias maior que zero para mais de uma parcela.','error');return;}
 
-  const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
-
   const totalProd = itensVenda.reduce((s,i)=>s+Number(i.subtotal),0);
   const totalCustoCalculado = itensVenda.reduce((s,i)=>s+(Number(i.preco_custo||0)*Number(i.quantidade)),0);
   const totalCusto = totalCustoCalculado;
-  const desconto = parseFloat(document.getElementById('f-desconto_total').value||0);
+  const desconto = numeroVenda(document.getElementById('f-desconto_total').value);
+  if(desconto<0){toast('O desconto do pedido não pode ser negativo.','error');return;}
+  if(desconto>totalProd+0.005){toast('O desconto do pedido não pode ser maior que o total dos itens.','error');return;}
   const final = Math.max(0,totalProd-desconto);
   const status = document.getElementById('f-status_entrega').value || 'PENDENTE';
   const statusAnterior = isNew ? 'PENDENTE' : (items.find(x=>Number(x.id_venda)===Number(currentId))?.status_entrega || 'PENDENTE');
@@ -1623,6 +1648,7 @@ async function saveVenda() {
     toast('Informe o meio de pagamento para venda entregue gerar financeiro.','error');
     return;
   }
+  const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
 
   const dadosVenda = {
     codigo_venda: codigo,
@@ -1659,7 +1685,8 @@ async function saveVenda() {
       return;
     }
   } else {
-    const itensAnteriores = await apiGet(`venda_itens?select=id_produto,quantidade,preco_unitario,desconto_item&id_venda=eq.${currentId}`);
+    const itensAnterioresBanco = await apiGet(`venda_itens?select=id_produto,quantidade,preco_unitario,desconto_item&id_venda=eq.${currentId}`);
+    const itensAnteriores=Array.isArray(itensAnterioresBanco)?itensAnterioresBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensAnterioresBanco;
     const{ok,data:res}=await apiPatch(`vendas?id_venda=eq.${currentId}`,dadosVenda);
     if(!ok){ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='✓ Salvar Alterações'; return; }
     // Só deletar e reinserir itens se houver itens na tela
@@ -1699,6 +1726,20 @@ async function saveVenda() {
       btn.disabled=false; btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
       return;
     }
+    const vendaAnterior=items.find(x=>Number(x.id_venda)===Number(vendaId));
+    const financeiro=await prepararIntegracaoBaixaContaReceber({id_conta_financas:vendaAnterior?.id_conta_financas||null});
+    if(!financeiro.ok){
+      if(!financeiro.cancelada)toast(financeiro.message,'error');
+      btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+      return;
+    }
+    const titulosCriados=Array.isArray(contasRes.data)?contasRes.data:[];
+    const sincronizacao=await vincularTitulosReceberFinancas(titulosCriados,financeiro,`Venda ${dadosVenda.codigo_venda||vendaAnterior?.codigo_venda||'#'+vendaId}`);
+    if(!sincronizacao.ok){
+      toast('Venda salva, mas o Finanças não foi atualizado: '+sincronizacao.message,'error');
+      btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+      return;
+    }
 
     if(statusAnterior !== 'ENTREGUE') {
       const estoqueRes = await ajustarEstoqueVenda(vendaId, 'baixar');
@@ -1713,6 +1754,10 @@ async function saveVenda() {
   // Salvar itens atuais antes de recarregar
   const itensAtual = [...itensVenda];
   const isNovoSalvo = isNew;
+  if(isNovoSalvo){
+    await finalizarCadastroNovo();
+    return;
+  }
   
   await loadItems();
   
@@ -1720,6 +1765,7 @@ async function saveVenda() {
   itensVenda = itensAtual;
   currentId = vendaId;
   isNew = false;
+  formularioAlterado = false;
   
   // Atualizar apenas a sidebar e o botão salvar, sem recriar o form
   renderList();
@@ -1857,8 +1903,7 @@ async function confirmarEntrega(idVenda) {
 
   document.getElementById('entrega-modal')?.remove();
   toast('Entrega confirmada e conta a receber gerada em aberto!','success');
-  await loadItems();
-  openItem(idVenda);
+  await finalizarCadastroNovo();
 }
 
 async function cancelarEntrega(idVenda) {

@@ -160,12 +160,11 @@ async function renderFormConta(c) {
   const baixaDataPadrao = `${agora.getFullYear()}-${String(agora.getMonth()+1).padStart(2,'0')}-${String(agora.getDate()).padStart(2,'0')}T${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
   const vencimentoManual = v('data_vencimento') || contasFmtDataLocal(new Date());
   const origemVenda=!!c?.id_venda;
+  let integracaoFinancasAtiva=false;
+  try{integracaoFinancasAtiva=typeof empresaIntegraFinancas==='function'&&await empresaIntegraFinancas();}catch(e){}
 
   document.getElementById('content-body').innerHTML = `
-    <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-      <span>Dados da Conta · Parcela ${rotuloParcela(c)} · Total ${contasFmtMoeda(valorTotalParcelas(c,'receber'))}</span>
-      ${c?.status_recebimento === 'RECEBIDO' ? `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:11px;" onclick="reativarRecebimento()">↺ Reativar baixa</button>` : ''}
-    </div>
+    <div class="section-label"><span>Dados da Conta · Parcela ${rotuloParcela(c)} · Total ${contasFmtMoeda(valorTotalParcelas(c,'receber'))}</span></div>
     <div class="form-grid">
       <div class="form-group full">
         <label class="form-label">Cliente</label>
@@ -257,6 +256,9 @@ async function renderFormConta(c) {
       ${c && !origemVenda && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? '<button class="btn btn-secondary" onclick="parcelarContaReceber()">Parcelar conta</button>' : ''}
       ${c && saldoAberto > 0.005 ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="baixarContaParcial()">Baixar Valor</button>` : ''}
       ${c ? (c.status_recebimento !== 'RECEBIDO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarRecebido()">💰 Marcar Recebido</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">💰 Recebido</span>') : ''}
+      ${integracaoFinancasAtiva&&c?.status_recebimento==='RECEBIDO'&&!c?.id_movimento_financas?`<button type="button" class="btn btn-primary" onclick="sincronizarContaRecebidaFinancas(${c.id_conta})">Enviar ao Finanças</button>`:''}
+      ${valorRecebidoAtual > 0.005 ? '<button type="button" class="btn btn-secondary" onclick="reativarRecebimento()">↺ Reativar baixa</button>' : ''}
+      ${c?.id_venda ? `<button class="btn btn-secondary" onclick="mostrarResumoVendaConta(${c.id_venda},event)">Resumo da venda</button>` : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
     </div>`;
 }
@@ -284,6 +286,8 @@ async function parcelarContaReceber() {
   if(!confirm(`Dividir esta conta em ${qtd} parcelas?`)) return;
   const total=Number(document.getElementById('f-valor_original')?.value||conta.valor_original||0);
   if(total < qtd/100){toast('A quantidade de parcelas gera valores menores que R$ 0,01.','error');return;}
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta);
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
   const base=Math.floor((total/qtd)*100)/100;
   const venc=document.getElementById('f-data_vencimento')?.value||conta.data_vencimento;
   const obsBase=(document.getElementById('f-observacoes')?.value||conta.observacoes||'').replace(/^Parcela \d+\/\d+\s*-\s*/,'');
@@ -295,6 +299,9 @@ async function parcelarContaReceber() {
   if(!atualizada.ok){toast('Erro ao atualizar a primeira parcela.','error');return;}
   const criadas=await apiPost('contas_receber',dados);
   if(!criadas.ok){toast('Primeira parcela salva, mas houve erro ao criar as demais.','error');return;}
+  const parcelasSalvas=[...(Array.isArray(atualizada.data)?atualizada.data:[]),...(Array.isArray(criadas.data)?criadas.data:[])];
+  const sincronizacao=await vincularTitulosReceberFinancas(parcelasSalvas,financeiro,'Conta a receber parcelada');
+  if(!sincronizacao.ok){toast(`Parcelas salvas, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');return;}
   invalidarResumoContasVendas(); toast(`${qtd} parcelas geradas!`,'success'); await loadItems(); openItem(currentId);
 }
 
@@ -321,6 +328,9 @@ async function saveConta() {
   if(!data.id_cliente){toast('Selecione o cliente.','error');btn.disabled=false;btn.textContent='Salvar';return;}
   if(data.valor_original<=0){toast('Informe um valor maior que zero.','error');btn.disabled=false;btn.textContent='Salvar';return;}
   if(!data.data_vencimento){toast('Informe o primeiro vencimento.','error');btn.disabled=false;btn.textContent='Salvar';return;}
+  const contaAtual=isNew?null:items.find(x=>Number(x.id_conta)===Number(currentId));
+  const financeiro=await prepararIntegracaoBaixaContaReceber(contaAtual);
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');btn.disabled=false;btn.textContent='Salvar';return;}
   if(isNew) {
     const qtd=Math.max(1,parseInt(document.getElementById('f-novas-parcelas')?.value||'1',10)||1);
     const dias=Math.max(0,parseInt(document.getElementById('f-novas-dias')?.value||'0',10)||0);
@@ -333,7 +343,12 @@ async function saveConta() {
       return {...data,grupo_parcelamento:grupo,numero_parcela:idx+1,total_parcelas:qtd,valor_total_titulo:total,data_vencimento:addDaysToDateInput(data.data_vencimento,idx*dias),valor_original:valor,valor_recebido:data.status_recebimento==='RECEBIDO'?valor:0,observacoes:data.observacoes};
     });
     const criado=await apiPost('contas_receber',registros.map(({data_recebimento,...registro})=>registro));
-    if(criado.ok){invalidarResumoContasVendas();toast(qtd>1?`${qtd} contas a receber criadas!`:'Conta a receber criada!','success');await loadItems();const primeira=Array.isArray(criado.data)?criado.data[0]:criado.data;if(primeira)openItem(primeira.id_conta);}
+    if(criado.ok){
+      const titulos=Array.isArray(criado.data)?criado.data:[criado.data].filter(Boolean);
+      const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,'Conta a receber manual');
+      if(!sincronizacao.ok){toast(`Conta criada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');btn.disabled=false;btn.textContent='Salvar';return;}
+      invalidarResumoContasVendas();toast(qtd>1?`${qtd} contas a receber criadas!`:'Conta a receber criada!','success');await finalizarCadastroNovo();
+    }
     else{
       const erro=[criado.data?.message,criado.data?.details,criado.data?.hint].filter(Boolean).join(' - ')||'erro';
       const meioFixo=/meio_pagamento|pagamento/i.test(erro)&&/check constraint|violates check|restri[cç][aã]o/i.test(erro);
@@ -342,30 +357,38 @@ async function saveConta() {
     }
     return;
   }
-  if(items.find(x=>Number(x.id_conta)===Number(currentId))?.id_venda){toast('O valor deste título vem da venda. Altere a venda de origem.','error');btn.disabled=false;return;}
+  if(contaAtual?.id_venda){toast('O valor deste título vem da venda. Altere a venda de origem.','error');btn.disabled=false;return;}
   const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
-  if(ok){ invalidarResumoContasVendas(); toast('Conta atualizada!','success'); await loadItems(); openItem(currentId); }
+  if(ok){
+    const titulos=Array.isArray(res)?res:[];
+    const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,'Conta a receber manual');
+    if(!sincronizacao.ok){toast(`Conta atualizada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');btn.disabled=false;btn.textContent='Salvar';return;}
+    invalidarResumoContasVendas(); formularioAlterado=false; toast('Conta atualizada!','success'); await loadItems(); openItem(currentId);
+  }
   else{ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='✓ Salvar'; }
 }
 
 async function marcarRecebido() {
+  const conta=items.find(c=>Number(c.id_conta)===Number(currentId));
+  if(!conta){toast('Conta não encontrada.','error');return;}
   const dataRecebimentoInformada = document.getElementById('f-data_recebimento')?.value;
-  const valorRecebido = parseFloat(document.getElementById('f-valor_original').value||0);
-  const data = {
-    status_recebimento: 'RECEBIDO',
-    valor_recebido: valorRecebido,
-    data_recebimento: dataRecebimentoInformada ? new Date(dataRecebimentoInformada).toISOString() : new Date().toISOString(),
-    meio_pagamento: document.getElementById('f-meio_pagamento').value||null
-  };
-  const{ok}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
-  if(ok){invalidarResumoContasVendas(); toast('Pagamento confirmado!','success'); await loadItems(); openItem(currentId);}
-  else toast('Erro ao confirmar','error');
+  const baixa=await aplicarBaixaContaReceber(conta,contasValorAberto(conta),{
+    data_baixa:dataRecebimentoInformada?new Date(dataRecebimentoInformada).toISOString():new Date().toISOString(),
+    meio_pagamento:document.getElementById('f-meio_pagamento')?.value||conta.meio_pagamento||null,
+    observacoes:'Pagamento integral'
+  });
+  if(!baixa.ok){toast(baixa.message,'error');return;}
+  toast(baixa.aviso||'Pagamento confirmado!',baixa.aviso?'error':'success');
+  await loadItems();
+  openItem(currentId);
 }
 
 async function reativarRecebimento() {
   const conta = items.find(c => Number(c.id_conta) === Number(currentId));
   if(!conta) return toast('Conta não encontrada.','error');
   if(!confirm('Reativar esta conta? O valor recebido e a data de recebimento serão removidos, e ela voltará para pendente.')) return;
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta);
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
   const {ok,data:res} = await apiPatch(`contas_receber?id_conta=eq.${currentId}`, {
     status_recebimento: 'PENDENTE',
@@ -373,6 +396,8 @@ async function reativarRecebimento() {
     data_recebimento: null
   });
   if(ok) {
+    const sincronizacao=await vincularTitulosReceberFinancas(Array.isArray(res)?res:[],financeiro,'Conta a receber reativada');
+    if(!sincronizacao.ok){toast(`Conta reativada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');await loadItems();openItem(currentId);return;}
     invalidarResumoContasVendas();
     toast('Conta reativada e marcada como pendente.','success');
     await loadItems();
@@ -391,12 +416,93 @@ async function registrarBaixaContaReceber(payload) {
   }
 }
 
+function solicitarContaFinancasBaixa(contas) {
+  return new Promise(resolve => {
+    const lista=Array.isArray(contas)?contas:[];
+    if(!lista.length){resolve(null);return;}
+    document.getElementById('selecionar-conta-financas-baixa')?.remove();
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';
+    modal.id='selecionar-conta-financas-baixa';
+    modal.style.display='flex';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;">
+      <div class="modal-header"><span class="modal-title">Conta do Finanças</span></div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Onde este recebimento entrou? *</label>
+          <select class="form-input form-select" id="baixa-conta-financas-modal">${opcoesContasFinancas(lista)}</select>
+        </div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">A baixa também será registrada no Finanças.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-acao="cancelar">Cancelar</button>
+        <button type="button" class="btn btn-primary" data-acao="confirmar">Continuar</button>
+      </div>
+    </div>`;
+    const concluir=valor=>{modal.remove();resolve(valor);};
+    modal.querySelector('[data-acao="cancelar"]').onclick=()=>concluir(null);
+    modal.querySelector('[data-acao="confirmar"]').onclick=()=>{
+      const id=Number(modal.querySelector('#baixa-conta-financas-modal')?.value||0);
+      if(!id){toast('Selecione a conta do Finanças.','error');return;}
+      concluir(id);
+    };
+    modal.addEventListener('click',e=>{if(e.target===modal)concluir(null);});
+    document.body.appendChild(modal);
+  });
+}
+
+async function prepararIntegracaoBaixaContaReceber(conta, contaInformada) {
+  if(typeof carregarIntegracaoFinancas!=='function')return {ok:true,ativa:false};
+  let integracao;
+  try{integracao=await carregarIntegracaoFinancas('entrada');}
+  catch(e){return {ok:false,message:'Não foi possível consultar o Finanças: '+(e.message||e)};}
+  if(!integracao.ativa)return {ok:true,ativa:false};
+  let contaId=Number(contaInformada||conta?.id_conta_financas||0);
+  if(!contaId)contaId=Number(await solicitarContaFinancasBaixa(integracao.contas)||0);
+  if(!contaId)return {ok:false,cancelada:true,message:'Baixa cancelada: selecione a conta do Finanças.'};
+  return {ok:true,ativa:true,contaId,integracao};
+}
+
+async function vincularTitulosReceberFinancas(titulos,financeiro,descricao) {
+  const lista=(Array.isArray(titulos)?titulos:[]).filter(Boolean);
+  if(!financeiro?.ativa||!lista.length)return {ok:true};
+  return vincularMovimentosFinancas('contas_receber','id_conta',lista,{
+    ativa:true,
+    tipo:'entrada',
+    contaId:financeiro.contaId,
+    categoria:financeiro.integracao.categoria,
+    descricao:descricao||'Conta a receber',
+    documento:null
+  });
+}
+
+async function sincronizarContaRecebidaFinancas(idConta) {
+  const conta=items.find(c=>Number(c.id_conta)===Number(idConta));
+  if(!conta){toast('Conta não encontrada.','error');return;}
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta);
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
+  if(!financeiro.ativa){toast('A integração com o Finanças não está ativa para esta empresa.','error');return;}
+  const descricao=conta.codigo_venda?`Venda ${conta.codigo_venda}`:`Recebimento #${conta.id_conta}`;
+  const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',[conta],{ativa:true,tipo:'entrada',contaId:financeiro.contaId,categoria:financeiro.integracao.categoria,descricao,documento:conta.codigo_venda||null});
+  if(!vinculo.ok){toast('Não foi possível enviar ao Finanças: '+vinculo.message,'error');return;}
+  const atualizadas=await apiGet(`contas_receber?select=*&id_conta=eq.${conta.id_conta}&limit=1`);
+  const atualizada=Array.isArray(atualizadas)?atualizadas[0]:null;
+  try{if(atualizada)await sincronizarTituloFinanceiroAposAlteracao('contas_receber',atualizada);}
+  catch(e){toast('Movimento criado, mas não foi possível efetivá-lo: '+(e.message||e),'error');return;}
+  toast('Recebimento enviado e efetivado no Finanças.','success');
+  await loadItems();
+  openItem(idConta);
+}
+
 async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
   const valor = Number(valorBaixa || 0);
   if(!conta || valor <= 0) return { ok:false, message:'Informe um valor de baixa maior que zero.' };
   const recebidoAtual = contasValorRecebido(conta);
   const saldoAtual = contasValorAberto(conta);
   if(saldoAtual <= 0.005) return { ok:false, message:'Esta conta ja esta quitada.' };
+
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta,opcoes.id_conta_financas);
+  if(!financeiro.ok)return financeiro;
 
   const aplicado = Math.min(valor, saldoAtual);
   const novoRecebido = Number((recebidoAtual + aplicado).toFixed(2));
@@ -413,7 +519,12 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     meio_pagamento: meio,
     observacoes
   });
-  if(!res.ok) return { ok:false, message:res.data?.message || `Erro ao baixar conta ${conta.id_conta}` };
+  let avisoSincronizacao=null;
+  if(!res.ok){
+    const mensagem=res.data?.message||`Erro ao baixar conta ${conta.id_conta}`;
+    if(!/salva localmente/i.test(mensagem))return {ok:false,message:mensagem};
+    avisoSincronizacao=mensagem;
+  }
   invalidarResumoContasVendas();
 
   await registrarBaixaContaReceber({
@@ -425,7 +536,44 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     observacoes: opcoes.observacoes || null
   });
 
-  return { ok:true, aplicado, sobra: Number((valor - aplicado).toFixed(2)), conta: res.data?.[0] };
+  let tituloAtualizado={...conta,...(res.data?.[0]||{}),valor_recebido:novoRecebido,status_recebimento:status,data_recebimento:dataBaixa,meio_pagamento:meio,observacoes};
+  if(financeiro.ativa){
+    if(!tituloAtualizado.id_movimento_financas){
+      const descricao=conta.codigo_venda?`Venda ${conta.codigo_venda}`:`Recebimento #${conta.id_conta}`;
+      const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',[tituloAtualizado],{ativa:true,tipo:'entrada',contaId:financeiro.contaId,categoria:financeiro.integracao.categoria,descricao,documento:conta.codigo_venda||null});
+      if(!vinculo.ok)return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas a integração com o Finanças falhou: ${vinculo.message}`};
+      const recarregada=await apiGet(`contas_receber?select=*&id_conta=eq.${conta.id_conta}&limit=1`);
+      tituloAtualizado=Array.isArray(recarregada)&&recarregada[0]?recarregada[0]:tituloAtualizado;
+    }
+    try{await sincronizarTituloFinanceiroAposAlteracao('contas_receber',tituloAtualizado);avisoSincronizacao=null;}
+    catch(e){return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas não foi possível atualizar o Finanças: ${e.message||e}`};}
+  }
+
+  return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),conta:res.data?.[0],aviso:avisoSincronizacao};
+}
+
+async function marcarContaReceberPagaRapido(idConta, event) {
+  event?.stopPropagation();
+  const botao = event?.currentTarget;
+  const conta = items.find(c=>Number(c.id_conta)===Number(idConta));
+  const saldo = contasValorAberto(conta);
+  if(!conta || saldo <= 0.005) { toast('Esta conta já está quitada.','info'); return; }
+  const cliente = conta.clientes?.nome_fantasia || conta.clientes?.razao_social || `Conta #${idConta}`;
+  if(!confirm(`Marcar como pago ${contasFmtMoeda(saldo)} de ${cliente}?`)) return;
+  if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
+  const baixa = await aplicarBaixaContaReceber(conta, saldo, {
+    data_baixa: new Date().toISOString(),
+    meio_pagamento: conta.meio_pagamento || null,
+    observacoes: 'Pagamento integral pela lista lateral'
+  });
+  if(!baixa.ok) {
+    if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
+    toast(baixa.message,'error');
+    return;
+  }
+  toast(baixa.aviso||`Conta quitada: ${contasFmtMoeda(baixa.aplicado)}.`,baixa.aviso?'error':'success');
+  currentId = null;
+  await renderDashboardContas();
 }
 
 async function baixarContaParcial() {
@@ -437,7 +585,7 @@ async function baixarContaParcial() {
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
   const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes });
   if(!baixa.ok) { toast(baixa.message,'error'); return; }
-  toast(`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.`,'success');
+  toast(baixa.aviso||`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.`,baixa.aviso?'error':'success');
   await loadItems();
   openItem(currentId);
 }
@@ -524,6 +672,7 @@ async function aplicarBaixaClienteContas() {
     totalAplicado += baixa.aplicado;
     restante = baixa.sobra;
     qtd += 1;
+    if(baixa.aviso){toast(baixa.aviso,'error');await loadItems();await renderDashboardContas();return;}
   }
 
   const sobraMsg = restante > 0.005 ? ` Sobra nao aplicada: ${contasFmtMoeda(restante)}.` : '';
@@ -791,6 +940,86 @@ function listarContas(filtro, titulo) {
 
 function contasFmtMoeda(n) {
   return 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function fecharResumoOrigemConta() {
+  document.getElementById('resumo-origem-conta-modal')?.remove();
+}
+
+function resumoOrigemLinha(label, valor) {
+  return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px;min-width:0;">
+    <div class="form-label">${compraEsc(label)}</div>
+    <div style="font-size:12px;color:var(--text);margin-top:3px;overflow-wrap:anywhere;">${compraEsc(valor||'-')}</div>
+  </div>`;
+}
+
+function abrirModalResumoOrigem(titulo, dadosHtml, itensHtml) {
+  fecharResumoOrigemConta();
+  const modal=document.createElement('div');
+  modal.className='modal-overlay';
+  modal.id='resumo-origem-conta-modal';
+  modal.style.display='flex';
+  modal.innerHTML=`<div class="modal" style="max-width:760px;">
+    <div class="modal-header"><span class="modal-title">${compraEsc(titulo)}</span><button class="modal-close" onclick="fecharResumoOrigemConta()">✕</button></div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-bottom:14px;">${dadosHtml}</div>
+      <div class="section-label"><span>Itens</span></div>
+      <div class="responsive-table-wrap">${itensHtml}</div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" onclick="fecharResumoOrigemConta()">Fechar</button></div>
+  </div>`;
+  modal.addEventListener('click',e=>{if(e.target===modal)fecharResumoOrigemConta();});
+  document.body.appendChild(modal);
+}
+
+async function mostrarResumoVendaConta(idVenda, event) {
+  event?.stopPropagation();
+  if(!idVenda) { toast('Este título não possui venda vinculada.','info'); return; }
+  const [vendas,itens]=await Promise.all([
+    apiGet(`vendas?select=*,clientes(nome_fantasia,razao_social)&id_venda=eq.${idVenda}&limit=1`),
+    apiGet(`venda_itens?select=quantidade,preco_unitario,desconto_item,subtotal,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`)
+  ]);
+  const venda=Array.isArray(vendas)?vendas[0]:null;
+  if(!venda){toast('Venda vinculada não encontrada.','error');return;}
+  const cliente=venda.clientes?.nome_fantasia||venda.clientes?.razao_social||'-';
+  const linhas=Array.isArray(itens)?itens:[];
+  const tabela=`<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:520px;">
+    <thead><tr style="background:var(--surface2);"><th style="padding:8px;text-align:left;">Produto</th><th style="padding:8px;text-align:right;">Qtd.</th><th style="padding:8px;text-align:right;">Unitário</th><th style="padding:8px;text-align:right;">Desconto</th><th style="padding:8px;text-align:right;">Subtotal</th></tr></thead>
+    <tbody>${linhas.map(i=>`<tr style="border-top:1px solid var(--border);"><td style="padding:8px;">${compraEsc(i.produtos?.nome_mercadoria||'Produto')}</td><td style="padding:8px;text-align:right;">${Number(i.quantidade||0).toLocaleString('pt-BR')}</td><td style="padding:8px;text-align:right;">${contasFmtMoeda(i.preco_unitario)}</td><td style="padding:8px;text-align:right;">${contasFmtMoeda(i.desconto_item)}</td><td style="padding:8px;text-align:right;font-weight:600;color:var(--accent);">${contasFmtMoeda(i.subtotal)}</td></tr>`).join('')||'<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text3);">Sem itens vinculados.</td></tr>'}</tbody>
+  </table>`;
+  const dados=[
+    resumoOrigemLinha('Venda',venda.codigo_venda||`#${idVenda}`),resumoOrigemLinha('Cliente',cliente),
+    resumoOrigemLinha('Data',dataPuraBR(venda.data_venda)),resumoOrigemLinha('Entrega',dataPuraBR(venda.data_entrega)),
+    resumoOrigemLinha('Status',venda.status_entrega),resumoOrigemLinha('Pagamento',venda.meio_pagamento),
+    resumoOrigemLinha('Produtos',contasFmtMoeda(venda.valor_produtos)),resumoOrigemLinha('Valor final',contasFmtMoeda(venda.valor_final))
+  ].join('');
+  abrirModalResumoOrigem(`Resumo da venda ${venda.codigo_venda||'#'+idVenda}`,dados,tabela);
+}
+
+async function mostrarResumoCompraConta(idCompra, event) {
+  event?.stopPropagation();
+  if(!idCompra) { toast('Este título não possui compra vinculada.','info'); return; }
+  await loadCaches();
+  const [compras,itens]=await Promise.all([
+    apiGet(`compras?select=*&id_compra=eq.${idCompra}&limit=1`),
+    apiGet(`compra_itens?select=*&id_compra=eq.${idCompra}&order=id_item_compra.asc`)
+  ]);
+  const compra=Array.isArray(compras)?compras[0]:null;
+  if(!compra){toast('Compra vinculada não encontrada.','error');return;}
+  const fornecedor=cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(compra.id_fornecedor));
+  const nomeFornecedor=fornecedor?.nome_fantasia||fornecedor?.razao_social||compra.fornecedor_nome||'-';
+  const linhas=Array.isArray(itens)?itens:[];
+  const tabela=`<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:460px;">
+    <thead><tr style="background:var(--surface2);"><th style="padding:8px;text-align:left;">Produto</th><th style="padding:8px;text-align:right;">Qtd.</th><th style="padding:8px;text-align:right;">Entrada</th><th style="padding:8px;text-align:right;">Subtotal</th></tr></thead>
+    <tbody>${linhas.map(i=>{const p=cacheProdutos.find(x=>Number(x.id_produto)===Number(i.id_produto));return `<tr style="border-top:1px solid var(--border);"><td style="padding:8px;">${compraEsc(p?.nome_mercadoria||`Produto #${i.id_produto}`)}</td><td style="padding:8px;text-align:right;">${Number(i.quantidade||0).toLocaleString('pt-BR')}</td><td style="padding:8px;text-align:right;">${contasFmtMoeda(i.preco_entrada)}</td><td style="padding:8px;text-align:right;font-weight:600;color:var(--accent);">${contasFmtMoeda(i.subtotal)}</td></tr>`;}).join('')||'<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--text3);">Sem itens vinculados.</td></tr>'}</tbody>
+  </table>`;
+  const dados=[
+    resumoOrigemLinha('Compra',compra.codigo_compra||`#${idCompra}`),resumoOrigemLinha('Fornecedor',nomeFornecedor),
+    resumoOrigemLinha('Data',dataPuraBR(compra.data_compra)),resumoOrigemLinha('Nota',compra.numero_nota),
+    resumoOrigemLinha('Status',compra.status_compra),resumoOrigemLinha('Pagamento',compra.meio_pagamento),
+    resumoOrigemLinha('Tipo',compra.tipo_entrada==='NOTA_FISCAL'?'NF-e completa':'Entrada básica'),resumoOrigemLinha('Valor total',contasFmtMoeda(compra.valor_total))
+  ].join('');
+  abrirModalResumoOrigem(`Resumo da compra ${compra.codigo_compra||'#'+idCompra}`,dados,tabela);
 }
 
 function contasDateOnly(value) {
