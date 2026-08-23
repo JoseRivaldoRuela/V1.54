@@ -237,6 +237,8 @@ async function renderFormConta(c) {
       <textarea class="form-textarea" id="f-observacoes" placeholder="Observações...">${v('observacoes')}</textarea>
     </div>
 
+    <label style="display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" id="f-baixa-atualizar-financas" checked style="width:17px;height:17px;"><span style="font-size:12px;"><b>Atualizar o Finanças nas baixas e reativações</b><small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para alterar somente o Contas a Receber.</small></span></label>
+
     ${c && saldoAberto > 0.005 ? `
     <div class="section-label"><span>Nova Baixa</span></div>
     <div class="form-grid">
@@ -330,7 +332,8 @@ async function saveConta() {
   if(data.valor_original<=0){toast('Informe um valor maior que zero.','error');btn.disabled=false;btn.textContent='Salvar';return;}
   if(!data.data_vencimento){toast('Informe o primeiro vencimento.','error');btn.disabled=false;btn.textContent='Salvar';return;}
   const contaAtual=isNew?null:items.find(x=>Number(x.id_conta)===Number(currentId));
-  const financeiro=await prepararIntegracaoBaixaContaReceber(contaAtual);
+  const atualizarFinancas=baixaAtualizaFinancas();
+  const financeiro=await prepararIntegracaoBaixaContaReceber(contaAtual,null,atualizarFinancas);
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');btn.disabled=false;btn.textContent='Salvar';return;}
   if(isNew) {
     const qtd=Math.max(1,parseInt(document.getElementById('f-novas-parcelas')?.value||'1',10)||1);
@@ -359,7 +362,7 @@ async function saveConta() {
     return;
   }
   if(contaAtual?.id_venda){toast('O valor deste título vem da venda. Altere a venda de origem.','error');btn.disabled=false;return;}
-  const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data);
+  const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data,{sincronizarFinancas:atualizarFinancas});
   if(ok){
     const titulos=Array.isArray(res)?res:[];
     const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,'Conta a receber manual');
@@ -376,7 +379,8 @@ async function marcarRecebido() {
   const baixa=await aplicarBaixaContaReceber(conta,contasValorAberto(conta),{
     data_baixa:dataRecebimentoInformada?new Date(dataRecebimentoInformada).toISOString():new Date().toISOString(),
     meio_pagamento:document.getElementById('f-meio_pagamento')?.value||conta.meio_pagamento||null,
-    observacoes:'Pagamento integral'
+    observacoes:'Pagamento integral',
+    atualizar_financas:baixaAtualizaFinancas()
   });
   if(!baixa.ok){toast(baixa.message,'error');return;}
   toast(baixa.aviso||'Pagamento confirmado!',baixa.aviso?'error':'success');
@@ -388,14 +392,15 @@ async function reativarRecebimento() {
   const conta = items.find(c => Number(c.id_conta) === Number(currentId));
   if(!conta) return toast('Conta não encontrada.','error');
   if(!confirm('Reativar esta conta? O valor recebido e a data de recebimento serão removidos, e ela voltará para pendente.')) return;
-  const financeiro=await prepararIntegracaoBaixaContaReceber(conta);
+  const atualizarFinancas=baixaAtualizaFinancas();
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta,null,atualizarFinancas);
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
   const {ok,data:res} = await apiPatch(`contas_receber?id_conta=eq.${currentId}`, {
     status_recebimento: 'PENDENTE',
     valor_recebido: 0,
     data_recebimento: null
-  });
+  },{sincronizarFinancas:atualizarFinancas});
   if(ok) {
     const sincronizacao=await vincularTitulosReceberFinancas(Array.isArray(res)?res:[],financeiro,'Conta a receber reativada');
     if(!sincronizacao.ok){toast(`Conta reativada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');await loadItems();openItem(currentId);return;}
@@ -449,10 +454,11 @@ function solicitarContaFinancasBaixa(contas) {
     };
     modal.addEventListener('click',e=>{if(e.target===modal)concluir(null);});
     document.body.appendChild(modal);
-  });
+    });
 }
 
-async function prepararIntegracaoBaixaContaReceber(conta, contaInformada) {
+async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atualizarFinancas=true) {
+  if(atualizarFinancas===false)return {ok:true,ativa:false,ignorada:true};
   if(typeof carregarIntegracaoFinancas!=='function')return {ok:true,ativa:false};
   let integracao;
   try{integracao=await carregarIntegracaoFinancas('entrada');}
@@ -520,7 +526,8 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
   const saldoAtual = contasValorAberto(conta);
   if(saldoAtual <= 0.005) return { ok:false, message:'Esta conta ja esta quitada.' };
 
-  const financeiro=await prepararIntegracaoBaixaContaReceber(conta,opcoes.id_conta_financas);
+  const atualizarFinancas=opcoes.atualizar_financas!==false;
+  const financeiro=await prepararIntegracaoBaixaContaReceber(conta,opcoes.id_conta_financas,atualizarFinancas);
   if(!financeiro.ok)return financeiro;
 
   const aplicado = Math.min(valor, saldoAtual);
@@ -538,7 +545,7 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     meio_pagamento: meio,
     observacoes,
     ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
-  });
+  },{sincronizarFinancas:atualizarFinancas});
   let avisoSincronizacao=null;
   if(!res.ok){
     const mensagem=res.data?.message||`Erro ao baixar conta ${conta.id_conta}`;
@@ -579,12 +586,14 @@ async function marcarContaReceberPagaRapido(idConta, event) {
   const saldo = contasValorAberto(conta);
   if(!conta || saldo <= 0.005) { toast('Esta conta já está quitada.','info'); return; }
   const cliente = conta.clientes?.nome_fantasia || conta.clientes?.razao_social || `Conta #${idConta}`;
-  if(!confirm(`Marcar como pago ${contasFmtMoeda(saldo)} de ${cliente}?`)) return;
+  const confirmacao=await confirmarBaixaComOpcaoFinancas(`Marcar como recebido ${contasFmtMoeda(saldo)} de ${cliente}?`);
+  if(!confirmacao)return;
   if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
   const baixa = await aplicarBaixaContaReceber(conta, saldo, {
     data_baixa: new Date().toISOString(),
     meio_pagamento: conta.meio_pagamento || null,
-    observacoes: 'Pagamento integral pela lista lateral'
+    observacoes: 'Pagamento integral pela lista lateral',
+    atualizar_financas:confirmacao.atualizarFinancas
   });
   if(!baixa.ok) {
     if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
@@ -603,7 +612,7 @@ async function baixarContaParcial() {
   const meio = document.getElementById('f-meio_pagamento')?.value || conta?.meio_pagamento || null;
   const observacoes = document.getElementById('f-baixa_obs')?.value?.trim() || null;
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
-  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes });
+  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes, atualizar_financas:baixaAtualizaFinancas() });
   if(!baixa.ok) { toast(baixa.message,'error'); return; }
   toast(baixa.aviso||`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.`,baixa.aviso?'error':'success');
   await loadItems();
@@ -618,7 +627,38 @@ function contasAbertasOrdenadas(lista) {
       const db = contasDateOnly(b.data_vencimento);
       if(da !== db) return da < db ? -1 : 1;
       return Number(a.id_conta||0) - Number(b.id_conta||0);
-    });
+  });
+}
+
+async function carregarContaFinancasBaixaCliente() {
+  const grupo=document.getElementById('baixa-cliente-conta-financas-grupo');
+  const select=document.getElementById('baixa-cliente-conta-financas');
+  const aviso=document.getElementById('baixa-cliente-conta-financas-aviso');
+  if(!grupo||!select)return;
+  try{
+    const integracao=await carregarIntegracaoFinancas('entrada');
+    if(!document.getElementById('baixa-cliente-conta-financas'))return;
+    grupo.dataset.integracaoAtiva=integracao.ativa?'true':'false';
+    if(!integracao.ativa){grupo.style.display='none';return;}
+    grupo.style.display=baixaAtualizaFinancas('baixa-cliente-atualizar-financas')?'block':'none';
+    select.innerHTML=opcoesContasFinancas(integracao.contas);
+    select.disabled=false;
+    if(aviso)aviso.textContent=integracao.contas.length
+      ? 'Informe onde o pagamento entrou. A mesma conta sera usada em todas as baixas deste lote.'
+      : 'Nenhuma conta ativa foi encontrada no Financas.';
+  }catch(e){
+    grupo.dataset.integracaoAtiva='erro';
+    grupo.style.display='block';
+    select.innerHTML='<option value="">Nao foi possivel carregar as contas</option>';
+    select.disabled=true;
+    if(aviso)aviso.textContent=e.message||String(e);
+  }
+}
+
+function alternarContaFinancasBaixaCliente() {
+  const grupo=document.getElementById('baixa-cliente-conta-financas-grupo');
+  if(!grupo||grupo.dataset.integracaoAtiva==='false')return;
+  grupo.style.display=baixaAtualizaFinancas('baixa-cliente-atualizar-financas')?'block':'none';
 }
 
 function renderBaixaClienteContas() {
@@ -660,6 +700,12 @@ function renderBaixaClienteContas() {
         <div class="form-group"><label class="form-label">Data do recebimento</label><input class="form-input" type="datetime-local" id="baixa-data" value="${baixaDataPadrao}"/></div>
         <div class="form-group"><label class="form-label">Meio de pagamento</label><input class="form-input" id="baixa-meio" placeholder="PIX, BOLETO, DINHEIRO..."/></div>
         <div class="form-group full"><label class="form-label">Observacao</label><input class="form-input" id="baixa-obs" placeholder="Ex: pagamento agrupado"/></div>
+        <div class="form-group full"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;"><input type="checkbox" id="baixa-cliente-atualizar-financas" checked onchange="alternarContaFinancasBaixaCliente()" style="width:17px;height:17px;"><span>Atualizar também o Finanças<small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para registrar as baixas somente no Contas a Receber.</small></span></label></div>
+        <div class="form-group full" id="baixa-cliente-conta-financas-grupo" style="display:none;" data-integracao-ativa="carregando">
+          <label class="form-label">Conta do Finanças *</label>
+          <select class="form-input form-select" id="baixa-cliente-conta-financas" disabled><option value="">Carregando contas...</option></select>
+          <small id="baixa-cliente-conta-financas-aviso" style="display:block;color:var(--text3);margin-top:4px;">Consultando o Finanças...</small>
+        </div>
       </div>
       <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:10px 0 14px;">
         O sistema vai baixar primeiro os pedidos mais antigos em aberto. Se o pagamento nao quitar tudo, o ultimo pedido fica parcial.
@@ -669,6 +715,7 @@ function renderBaixaClienteContas() {
         <button class="btn btn-secondary" onclick="renderDashboardContas()">Cancelar</button>
       </div>
     </div>`;
+  carregarContaFinancasBaixaCliente();
 }
 
 async function aplicarBaixaClienteContas() {
@@ -677,20 +724,24 @@ async function aplicarBaixaClienteContas() {
   const dataInput = document.getElementById('baixa-data')?.value;
   const meio = document.getElementById('baixa-meio')?.value?.trim() || null;
   const observacoes = document.getElementById('baixa-obs')?.value?.trim() || null;
+  const atualizarFinancas = baixaAtualizaFinancas('baixa-cliente-atualizar-financas');
+  const grupoFinancas=document.getElementById('baixa-cliente-conta-financas-grupo');
+  const contaFinancas=Number(document.getElementById('baixa-cliente-conta-financas')?.value||0);
   if(!idCliente) { toast('Selecione o cliente.','error'); return; }
   if(restante <= 0) { toast('Informe o valor recebido.','error'); return; }
+  if(atualizarFinancas&&grupoFinancas?.dataset.integracaoAtiva==='true'&&!contaFinancas){toast('Selecione a conta do Finanças.','error');return;}
 
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
   const abertas = contasAbertasOrdenadas(items).filter(c=>Number(c.id_cliente)===idCliente);
   if(!abertas.length) { toast('Cliente sem contas em aberto.','error'); return; }
 
-  const financeiro=await prepararIntegracaoBaixaContaReceber(abertas[0]);
+  const financeiro=await prepararIntegracaoBaixaContaReceber(abertas[0],contaFinancas,atualizarFinancas);
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
   let totalAplicado = 0, qtd = 0;
   for(const conta of abertas) {
     if(restante <= 0.005) break;
-    const baixa = await aplicarBaixaContaReceber(conta, restante, { data_baixa, meio_pagamento: meio || conta.meio_pagamento, observacoes, id_conta_financas:financeiro.contaId });
+    const baixa = await aplicarBaixaContaReceber(conta, restante, { data_baixa, meio_pagamento: meio || conta.meio_pagamento, observacoes, id_conta_financas:financeiro.contaId, atualizar_financas:atualizarFinancas });
     if(!baixa.ok) { toast(baixa.message,'error'); return; }
     totalAplicado += baixa.aplicado;
     restante = baixa.sobra;

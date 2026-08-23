@@ -1189,6 +1189,7 @@ async function renderFormContaPagar(c) {
     </div>` : ''}
     <div class="section-label"><span>Observações</span></div>
     <div class="form-group"><textarea class="form-textarea" id="f-observacoes">${v('observacoes')}</textarea></div>
+    <label style="display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" id="f-baixa-atualizar-financas" checked style="width:17px;height:17px;"><span style="font-size:12px;"><b>Atualizar o Finanças nas baixas e reativações</b><small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para alterar somente o Contas a Pagar.</small></span></label>
     <div class="form-actions">
       ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
@@ -1270,7 +1271,7 @@ async function saveContaPagar() {
     return;
   }
   if(items.find(x=>Number(x.id_conta_pagar)===Number(currentId))?.id_compra){toast('O valor deste título vem da compra. Altere a compra de origem.','error');return;}
-  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,data);
+  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,data,{sincronizarFinancas:baixaAtualizaFinancas()});
   if(!res.ok){ toast('Erro ao salvar conta: '+(res.data?.message||'erro'),'error'); return; }
   toast('Conta atualizada.','success');
   formularioAlterado=false;
@@ -1283,14 +1284,15 @@ async function marcarContaPagarPaga() {
   const dataInformada = document.getElementById('f-data_pagamento')?.value;
   const dataPagamento = dataInformada ? new Date(dataInformada) : new Date();
   if(Number.isNaN(dataPagamento.getTime())) { toast('Informe uma data de pagamento válida.','error'); return; }
+  const atualizarFinancas=baixaAtualizaFinancas();
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{
     status_pagamento:'PAGO',
     valor_pago: valor,
     data_pagamento: dataPagamento.toISOString(),
     meio_pagamento: document.getElementById('f-meio_pagamento')?.value||null
-  });
+  },{sincronizarFinancas:atualizarFinancas});
   if(!res.ok){ toast('Erro ao marcar como pago.','error'); return; }
-  toast('Pagamento confirmado.','success');
+  toast(`Pagamento confirmado${atualizarFinancas?' e atualizado no Finanças':' sem atualizar o Finanças'}.`,'success');
   await loadItems();
   openItem(currentId);
 }
@@ -1305,20 +1307,21 @@ async function marcarContaPagarPagaRapido(idConta, event) {
   if(!conta || saldo<=0.005 || conta.status_pagamento==='PAGO') { toast('Esta conta já está paga.','info'); return; }
   const fornecedor = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(conta.id_fornecedor));
   const nome = fornecedor?.nome_fantasia || fornecedor?.razao_social || `Conta #${idConta}`;
-  if(!confirm(`Marcar como pago ${compraFmt(saldo)} de ${nome}?`)) return;
+  const confirmacao=await confirmarBaixaComOpcaoFinancas(`Marcar como pago ${compraFmt(saldo)} de ${nome}?`);
+  if(!confirmacao)return;
   if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${idConta}`,{
     status_pagamento:'PAGO',
     valor_pago:original,
     data_pagamento:new Date().toISOString(),
     meio_pagamento:conta.meio_pagamento||null
-  });
+  },{sincronizarFinancas:confirmacao.atualizarFinancas});
   if(!res.ok) {
     if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
     toast('Erro ao marcar como pago: '+(res.data?.message||'erro'),'error');
     return;
   }
-  toast(`Pagamento confirmado: ${compraFmt(saldo)}.`,'success');
+  toast(`Pagamento confirmado: ${compraFmt(saldo)}${confirmacao.atualizarFinancas?'':' (sem atualizar o Finanças)'}.`,'success');
   currentId=null;
   await renderDashboardContasPagar();
 }
@@ -1327,7 +1330,8 @@ async function reativarContaPagar() {
   const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
   if(!conta)return toast('Conta não encontrada.','error');
   if(!confirm('Reativar esta baixa? O valor pago e a data de pagamento serão removidos.'))return;
-  const res=await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{status_pagamento:'PENDENTE',valor_pago:null,data_pagamento:null});
+  const atualizarFinancas=baixaAtualizaFinancas();
+  const res=await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{status_pagamento:'PENDENTE',valor_pago:null,data_pagamento:null},{sincronizarFinancas:atualizarFinancas});
   if(!res.ok){toast('Erro ao reativar a baixa: '+(res.data?.message||'erro'),'error');return;}
-  toast('Baixa reativada.','success');await loadItems();openItem(currentId);
+  toast(`Baixa reativada${atualizarFinancas?' e atualizada no Finanças':' sem atualizar o Finanças'}.`,'success');await loadItems();openItem(currentId);
 }

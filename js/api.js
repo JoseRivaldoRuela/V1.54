@@ -47,11 +47,11 @@ async function apiPost(p,b){
   const r=await fetch(url(p),{method:'POST',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)});
   return{ok:r.ok,data:await r.json()};
 }
-async function apiPatch(p,b){
+async function apiPatch(p,b,opcoes={}){
   const r=await fetch(url(caminhoComEscopoEmpresa(p)),{method:'PATCH',headers:hdrs({'Content-Type':'application/json','Prefer':'return=representation'}),body:JSON.stringify(b)}),data=await r.json();
   const tabela=String(p||'').split('?')[0];
   let erroSincronizacao=null;
-  if(r.ok&&['contas_receber','contas_pagar'].includes(tabela)&&typeof sincronizarTituloFinanceiroAposAlteracao==='function'){
+  if(r.ok&&opcoes.sincronizarFinancas!==false&&['contas_receber','contas_pagar'].includes(tabela)&&typeof sincronizarTituloFinanceiroAposAlteracao==='function'){
     try{for(const titulo of Array.isArray(data)?data:[])await sincronizarTituloFinanceiroAposAlteracao(tabela,titulo);}catch(e){erroSincronizacao=e;}
   }
   return erroSincronizacao?{ok:false,data:{message:'Alteração salva localmente, mas o Finanças não foi atualizado: '+(erroSincronizacao.message||erroSincronizacao)}}:{ok:r.ok,data};

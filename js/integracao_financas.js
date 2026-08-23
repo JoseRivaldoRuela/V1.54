@@ -1,6 +1,26 @@
 const FINANCAS_API_URL='https://jlfltollgwtrqpapqnnp.supabase.co/rest/v1';
 let integracaoFinancasAtivaCache=null;
 
+function confirmarBaixaComOpcaoFinancas(mensagem){
+  return new Promise(resolve=>{
+    document.getElementById('confirmar-baixa-financas')?.remove();
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';modal.id='confirmar-baixa-financas';modal.style.display='flex';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar baixa</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;"></div><label style="display:flex;align-items:center;gap:9px;margin-top:16px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar também o Finanças</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque quando esta baixa não deve alterar o movimento financeiro.</small></span></label></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-acao="cancelar">Cancelar</button><button type="button" class="btn btn-primary" data-acao="confirmar">Confirmar baixa</button></div></div>`;
+    modal.querySelector('[data-mensagem]').textContent=mensagem;
+    const concluir=valor=>{modal.remove();resolve(valor)};
+    modal.querySelector('[data-acao="cancelar"]').onclick=()=>concluir(null);
+    modal.querySelector('[data-acao="confirmar"]').onclick=()=>concluir({atualizarFinancas:modal.querySelector('[data-atualizar-financas]').checked});
+    modal.addEventListener('click',event=>{if(event.target===modal)concluir(null)});
+    document.body.appendChild(modal);
+  });
+}
+
+function baixaAtualizaFinancas(id='f-baixa-atualizar-financas'){
+  const campo=document.getElementById(id);
+  return campo?campo.checked:true;
+}
+
 async function financasRequest(path,options={}){
   const sessao=sessaoAtual();
   const resposta=await fetch(`${FINANCAS_API_URL}/${path}`,{...options,headers:{apikey:ANON_KEY,Authorization:`Bearer ${ANON_KEY}`,'X-App-Session':sessao?.token||'','Content-Type':'application/json','Accept-Profile':'financas','Content-Profile':'financas',Accept:'application/json',...(options.headers||{})}});
