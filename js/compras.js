@@ -130,6 +130,8 @@ async function renderDashboardContasPagar() {
   const somaAberto = arr => arr.reduce((s,c)=>s+contaPagarAberto(c),0);
   const somaPago = arr => arr.reduce((s,c)=>s+Number(c.valor_pago||c.valor_original||0),0);
   const dias = parseInt(contasPagarDashPeriodo || '7', 10);
+  const fimMesSelecionado=contaPagarDateLocal(range.fim);
+  const dataFimGrafico=contasPagarDashMesOffset===0?hoje:new Date(fimMesSelecionado.getTime()-864e5);
   const labels = [], valoresPagos = [], valoresPagar = [], fornecedoresPagos = [], fornecedoresPagar = [];
   const detalharFornecedores = (lista, pago=false) => {
     const agrupado=new Map();
@@ -142,10 +144,10 @@ async function renderDashboardContasPagar() {
     return [...agrupado.entries()].sort((a,b)=>b[1]-a[1]).map(([nome,valor])=>`${nome}: ${compraFmt(valor)}`);
   };
   for(let i=dias-1; i>=0; i--) {
-    const d = new Date(hoje.getTime()-i*864e5);
+    const d = new Date(dataFimGrafico.getTime()-i*864e5);
     const data = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const pendentesDia=pendentes.filter(c=>String(c.data_vencimento||'').slice(0,10)===data);
-    const pagasDia=pagas.filter(c=>String(c.data_pagamento||'').slice(0,10)===data);
+    const pagasDia=pagas.filter(c=>dataReferenciaPaga(c)===data);
     labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
     valoresPagar.push(somaAberto(pendentesDia));
     valoresPagos.push(somaPago(pagasDia));
@@ -258,7 +260,7 @@ function limparFiltroContasPagar() {
   renderList();
 }
 
-async function renderDashboardCompras() {
+async function renderDashboardComprasLegado() {
   const body = document.getElementById('content-body');
   setActiveMenu('compras');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
@@ -399,6 +401,60 @@ async function renderDashboardCompras() {
   }, 100);
 }
 
+async function renderDashboardCompras() {
+  const body=document.getElementById('content-body'); setActiveMenu('compras');
+  body.innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
+  await loadCaches();
+  const hoje=new Date(), fmtData=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const dataCompra=c=>String(c?.data_compra||'').slice(0,10), hojeStr=fmtData(hoje), semana=fmtData(new Date(hoje.getFullYear(),hoje.getMonth(),hoje.getDate()-6));
+  const mesRef=new Date(hoje.getFullYear(),hoje.getMonth()+comprasDashMesOffset,1), inicioMes=fmtData(mesRef), fimMes=fmtData(new Date(mesRef.getFullYear(),mesRef.getMonth()+1,1));
+  const labelMes=mesRef.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}), soma=lista=>lista.reduce((s,c)=>s+Number(c.valor_total||0),0);
+  const [compras,itens]=await Promise.all([apiGet('compras?select=*&order=data_compra.desc'),apiGet('compra_itens?select=*&order=id_item_compra.asc')]);
+  if(!Array.isArray(compras)){body.innerHTML='<div class="empty-state"><p>Erro ao carregar compras</p></div>';return;}
+  const validas=compras.filter(c=>(c.status_compra||'').toUpperCase()!=='CANCELADA'), compraItens=Array.isArray(itens)?itens:[];
+  const comprasHoje=validas.filter(c=>dataCompra(c)===hojeStr), comprasSemana=validas.filter(c=>dataCompra(c)>=semana&&dataCompra(c)<=hojeStr), comprasMes=validas.filter(c=>dataCompra(c)>=inicioMes&&dataCompra(c)<fimMes);
+  const pendentes=validas.filter(c=>c.status_compra==='PENDENTE'), liberadasMes=comprasMes.filter(c=>c.status_compra==='LIBERADA');
+  const nomeFornecedor=c=>{const f=cacheFornecedores.find(x=>Number(x.id_fornecedor)===Number(c.id_fornecedor));return f?.nome_fantasia||f?.razao_social||`Fornecedor #${c.id_fornecedor||'-'}`;};
+  const fornMap={}; comprasMes.forEach(c=>{const nome=nomeFornecedor(c);if(!fornMap[nome])fornMap[nome]={nome,total:0,qtd:0};fornMap[nome].total+=Number(c.valor_total||0);fornMap[nome].qtd++;});
+  const topFornecedores=Object.values(fornMap).sort((a,b)=>b.total-a.total).slice(0,5), idsMes=new Set(comprasMes.map(c=>Number(c.id_compra))), prodMap={};
+  compraItens.filter(i=>idsMes.has(Number(i.id_compra))).forEach(i=>{const p=cacheProdutos.find(x=>Number(x.id_produto)===Number(i.id_produto)),nome=p?.nome_mercadoria||`Produto #${i.id_produto}`;if(!prodMap[nome])prodMap[nome]={nome,total:0,qtd:0};prodMap[nome].total+=Number(i.subtotal||0);prodMap[nome].qtd+=Number(i.quantidade||0);});
+  const topProdutos=Object.values(prodMap).sort((a,b)=>b.total-a.total).slice(0,6), labels=[], valores=[], detalhesFornecedores=[];
+  const dias=comprasDashPeriodo==='mes'?new Date(mesRef.getFullYear(),mesRef.getMonth()+1,0).getDate():Math.max(1,Number(comprasDashPeriodo||7));
+  for(let i=0;i<dias;i++){
+    const d=comprasDashPeriodo==='mes'?new Date(mesRef.getFullYear(),mesRef.getMonth(),i+1):new Date(hoje.getFullYear(),hoje.getMonth(),hoje.getDate()-(dias-1-i)), ds=fmtData(d), lista=validas.filter(c=>dataCompra(c)===ds), porFornecedor={};
+    labels.push(comprasDashPeriodo==='mes'?d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}):`${d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','')} ${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}`); valores.push(soma(lista));
+    lista.forEach(c=>{const nome=nomeFornecedor(c);porFornecedor[nome]=(porFornecedor[nome]||0)+Number(c.valor_total||0);});
+    const fornecedores=Object.entries(porFornecedor).sort((a,b)=>b[1]-a[1]),linhas=fornecedores.slice(0,10).map(([nome,total])=>`${nome}: ${compraFmt(total)}`);if(fornecedores.length>10)linhas.push(`+ ${fornecedores.length-10} fornecedor(es)`);detalhesFornecedores.push(linhas);
+  }
+  const card=(cor,filtro,titulo,lista,extra='')=>`<div class="dash-card ${cor}" onclick="listarComprasDash('${filtro}')"><div class="dash-card-label">${titulo}</div><div class="dash-card-value" style="font-size:20px;line-height:1.15;">${compraFmt(soma(lista))}</div><div class="dash-card-sub" style="font-weight:700;">${lista.length} compra${lista.length!==1?'s':''}</div>${extra}</div>`;
+  const listaFornecedores=topFornecedores.length?topFornecedores.map((f,i)=>`<div class="dash-list-item"><span class="dash-list-rank">${i+1}</span><div style="flex:1;min-width:0;"><div style="display:flex;justify-content:space-between;gap:8px;"><span class="dash-list-name">${f.nome}</span><span class="dash-list-value">${compraFmt(f.total)}</span></div><div style="font-size:11px;color:var(--text2);">${f.qtd} compra${f.qtd!==1?'s':''}</div><div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${topFornecedores[0].total?f.total/topFornecedores[0].total*100:0}%;background:var(--warn)"></div></div></div></div>`).join(''):'<div class="empty-state"><p>Nenhum dado no mês.</p></div>';
+  const listaProdutos=topProdutos.length?topProdutos.map((p,i)=>`<div class="dash-list-item"><span class="dash-list-rank">${i+1}</span><div style="flex:1;min-width:0;"><div style="display:flex;justify-content:space-between;gap:8px;"><span class="dash-list-name">${p.nome}</span><span class="dash-list-value">${compraFmt(p.total)}</span></div><div style="font-size:11px;color:var(--text2);">${Number(p.qtd||0).toFixed(2)} un compradas</div><div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${topProdutos[0].total?p.total/topProdutos[0].total*100:0}%;background:var(--accent2)"></div></div></div></div>`).join(''):'<div class="empty-state"><p>Nenhum produto comprado no mês.</p></div>';
+  body.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;"><button class="dash-period-btn" onclick="mudarMesDashboardCompras(-1)">‹ Mês anterior</button><button class="dash-period-btn ${comprasDashMesOffset===0?'active':''}" onclick="irMesAtualDashboardCompras()">Mês atual</button><button class="dash-period-btn" onclick="mudarMesDashboardCompras(1)" ${comprasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Próximo mês ›</button><button class="dash-period-btn" onclick="renderRankingMesesCompras()">Ranking / sequência de meses</button><span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${labelMes}</span></div>
+  <div class="dash-grid">${card('green','hoje','Compras Hoje',comprasHoje)}${card('blue','semana','Últimos 7 Dias',comprasSemana)}${card('orange','mes','Mês Selecionado',comprasMes,`<div style="font-size:11px;color:var(--text2);margin-top:6px;">${liberadasMes.length} liberada${liberadasMes.length!==1?'s':''}</div>`)}<div class="dash-card red" onclick="listarComprasDash('pendente')"><div class="dash-card-label">Entradas Pendentes</div><div class="dash-card-value">${pendentes.length}</div><div class="dash-card-sub">${compraFmt(soma(pendentes))}</div></div></div>
+  <div class="dash-charts"><div class="dash-chart-box"><div class="dash-chart-title"><span>${comprasDashPeriodo==='mes'?'Compras do Mês Selecionado':'Compras por Período'}</span><div class="dash-chart-period"><button class="dash-period-btn ${comprasDashPeriodo==='mes'?'active':''}" onclick="mudarPeriodoDashboardCompras('mes')">Mês</button><button class="dash-period-btn ${comprasDashPeriodo==='7'?'active':''}" onclick="mudarPeriodoDashboardCompras('7')">7d</button><button class="dash-period-btn ${comprasDashPeriodo==='15'?'active':''}" onclick="mudarPeriodoDashboardCompras('15')">15d</button><button class="dash-period-btn ${comprasDashPeriodo==='30'?'active':''}" onclick="mudarPeriodoDashboardCompras('30')">30d</button></div></div><div class="dash-canvas-wrap"><canvas id="chart-compras"></canvas></div></div><div class="dash-chart-box"><div class="dash-chart-title"><span>Top Fornecedores do Mês</span><span style="font-size:11px;color:var(--text2);text-transform:capitalize;">${labelMes}</span></div><div class="dash-list">${listaFornecedores}</div></div></div>
+  <div class="dash-chart-box" style="margin-bottom:20px;"><div class="dash-chart-title"><span>Produtos Mais Comprados no Mês</span><span style="font-size:11px;color:var(--text2);text-transform:capitalize;">${labelMes}</span></div><div class="dash-two-col">${listaProdutos}</div></div>`;
+  setTimeout(()=>{const ctx=document.getElementById('chart-compras');if(!ctx)return;if(chartCompras)chartCompras.destroy();chartCompras=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Compras (R$)',data:valores,borderColor:'#ffa502',backgroundColor:'rgba(255,165,2,.08)',borderWidth:2,pointBackgroundColor:'#ffa502',pointRadius:3,fill:true,tension:.35}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`Total: ${compraFmt(ctx.raw)}`,afterLabel:ctx=>detalhesFornecedores[ctx.dataIndex]?.length?['Fornecedores:',...detalhesFornecedores[ctx.dataIndex]]:[]}}},scales:{x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8888a0',font:{size:11}}},y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8888a0',font:{size:11},callback:v=>'R$ '+Number(v).toLocaleString('pt-BR')}}}}});},100);
+}
+
+function mudarPeriodoDashboardCompras(periodo){comprasDashPeriodo=['mes','7','15','30'].includes(String(periodo))?String(periodo):'7';renderDashboardCompras();}
+function mudarMesDashboardCompras(delta){comprasDashMesOffset=Math.min(0,comprasDashMesOffset+Number(delta||0));comprasDashPeriodo='mes';renderDashboardCompras();}
+function irMesAtualDashboardCompras(){comprasDashMesOffset=0;comprasDashPeriodo='mes';renderDashboardCompras();}
+
+async function renderRankingMesesCompras(){
+  const body=document.getElementById('content-body');body.innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Calculando ranking...</div>';
+  const compras=await apiGet('compras?select=data_compra,valor_total,status_compra&order=data_compra.asc');
+  if(!Array.isArray(compras)){body.innerHTML='<div class="empty-state"><p>Erro ao carregar as compras.</p></div>';return;}
+  const mapa=new Map();compras.filter(c=>c.data_compra&&(c.status_compra||'').toUpperCase()!=='CANCELADA').forEach(c=>{const mes=String(c.data_compra).slice(0,7);if(!mapa.has(mes))mapa.set(mes,{mes,total:0,qtd:0});const m=mapa.get(mes);m.total+=Number(c.valor_total||0);m.qtd++;});
+  const anos=[...new Set([...mapa.keys()].map(k=>Number(k.slice(0,4))))].sort((a,b)=>b-a);
+  window.rankingComprasQtd=Math.max(1,Math.min(60,Number(window.rankingComprasQtd||5)));window.rankingComprasEscopo=window.rankingComprasEscopo||'ano';window.rankingComprasOrdem=window.rankingComprasOrdem||'maiores';window.rankingComprasAno=Number(window.rankingComprasAno||anos[0]||new Date().getFullYear());
+  const candidatos=[...mapa.values()].filter(m=>window.rankingComprasEscopo==='todos'||Number(m.mes.slice(0,4))===window.rankingComprasAno);let dados;
+  if(window.rankingComprasOrdem==='sequencia')dados=candidatos.sort((a,b)=>a.mes.localeCompare(b.mes)).slice(-window.rankingComprasQtd);else dados=candidatos.sort((a,b)=>b.total-a.total).slice(0,window.rankingComprasQtd);
+  const maior=dados.reduce((m,x)=>Math.max(m,x.total),0),fmt=n=>compraFmt(Number(n||0));
+  body.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;"><button class="dash-period-btn" onclick="renderDashboardCompras()">← Voltar</button><span style="font-size:15px;font-weight:700;">Ranking e sequência de meses — Compras</span></div><div class="dash-chart-box" style="margin-bottom:14px;padding:12px;"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end;"><div class="form-group"><label class="form-label">Visualização</label><select class="form-input form-select" id="ranking-compras-ordem"><option value="maiores" ${window.rankingComprasOrdem==='maiores'?'selected':''}>Maiores compras</option><option value="sequencia" ${window.rankingComprasOrdem==='sequencia'?'selected':''}>Sequência de meses</option></select></div><div class="form-group"><label class="form-label">Quantidade de meses</label><input class="form-input" id="ranking-compras-qtd" type="number" min="1" max="60" value="${window.rankingComprasQtd}"></div><div class="form-group"><label class="form-label">Período</label><select class="form-input form-select" id="ranking-compras-escopo" onchange="document.getElementById('ranking-compras-ano').disabled=this.value==='todos'"><option value="ano" ${window.rankingComprasEscopo==='ano'?'selected':''}>Um ano</option><option value="todos" ${window.rankingComprasEscopo==='todos'?'selected':''}>Todos os anos</option></select></div><div class="form-group"><label class="form-label">Ano</label><select class="form-input form-select" id="ranking-compras-ano" ${window.rankingComprasEscopo==='todos'?'disabled':''}>${anos.map(a=>`<option value="${a}" ${a===window.rankingComprasAno?'selected':''}>${a}</option>`).join('')}</select></div><button class="btn btn-primary" onclick="aplicarRankingMesesCompras()">Mostrar ranking</button></div></div><div class="dash-chart-box" style="margin-bottom:20px;"><div class="dash-chart-title"><span>${window.rankingComprasOrdem==='maiores'?'Top '+dados.length+' meses por compras':dados.length+' meses em sequência'}</span><span style="font-size:11px;color:var(--text2);">${window.rankingComprasEscopo==='todos'?'Todo o histórico':'Ano '+window.rankingComprasAno}</span></div><div class="dash-list">${dados.length?dados.map((m,i)=>{const d=new Date(Number(m.mes.slice(0,4)),Number(m.mes.slice(5,7))-1,1),label=d.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),ticket=m.qtd?m.total/m.qtd:0;return `<div class="dash-list-item" style="cursor:pointer;" onclick="abrirMesRankingComprasNoDashboard('${m.mes}')"><span class="dash-list-rank">${i+1}</span><div style="flex:1;min-width:0;"><div style="display:flex;justify-content:space-between;gap:12px;"><span class="dash-list-name" style="text-transform:capitalize;">${label}</span><span class="dash-list-value">${fmt(m.total)}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text2);margin-top:4px;"><span>${m.qtd} compra${m.qtd!==1?'s':''}</span><span>Ticket médio ${fmt(ticket)}</span><span style="margin-left:auto;color:var(--accent);">Abrir mês →</span></div><div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${maior?m.total/maior*100:0}%"></div></div></div></div>`;}).join(''):'<div class="empty-state"><p>Nenhum mês encontrado.</p></div>'}</div></div>`;
+}
+function aplicarRankingMesesCompras(){window.rankingComprasQtd=Math.max(1,Math.min(60,Number(document.getElementById('ranking-compras-qtd')?.value||5)));window.rankingComprasEscopo=document.getElementById('ranking-compras-escopo')?.value==='todos'?'todos':'ano';window.rankingComprasOrdem=document.getElementById('ranking-compras-ordem')?.value==='sequencia'?'sequencia':'maiores';window.rankingComprasAno=Number(document.getElementById('ranking-compras-ano')?.value||new Date().getFullYear());renderRankingMesesCompras();}
+function abrirMesRankingComprasNoDashboard(chave){const p=String(chave||'').match(/^(\d{4})-(\d{2})$/);if(!p)return;const hoje=new Date(),ano=Number(p[1]),mes=Number(p[2])-1;comprasDashMesOffset=Math.min(0,(ano-hoje.getFullYear())*12+mes-hoje.getMonth());comprasDashPeriodo='mes';renderDashboardCompras();}
+
 function listarComprasDash(filtro) {
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const hojeStr = hoje.toISOString().slice(0,10);
@@ -407,7 +463,7 @@ function listarComprasDash(filtro) {
   let lista = [...items], titulo = 'Compras';
   if(filtro==='hoje'){ lista=items.filter(c=>(c.data_compra||'').slice(0,10)===hojeStr); titulo='Compras de Hoje'; }
   else if(filtro==='semana'){ lista=items.filter(c=>(c.data_compra||'').slice(0,10)>=semana); titulo='Compras — Últimos 7 Dias'; }
-  else if(filtro==='mes'){ lista=items.filter(c=>(c.data_compra||'').slice(0,10)>=mes); titulo='Compras — Este Mês'; }
+  else if(filtro==='mes'){ const ref=new Date(hoje.getFullYear(),hoje.getMonth()+comprasDashMesOffset,1),inicio=`${ref.getFullYear()}-${String(ref.getMonth()+1).padStart(2,'0')}-01`,prox=new Date(ref.getFullYear(),ref.getMonth()+1,1),fim=`${prox.getFullYear()}-${String(prox.getMonth()+1).padStart(2,'0')}-01`; lista=items.filter(c=>(c.data_compra||'').slice(0,10)>=inicio&&(c.data_compra||'').slice(0,10)<fim); titulo=`Compras — ${ref.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}`; }
   else if(filtro==='pendente'){ lista=items.filter(c=>c.status_compra==='PENDENTE'); titulo='Entradas Pendentes'; }
   mostrarDetalheCompras(lista, titulo);
 }
@@ -665,12 +721,14 @@ async function renderFormCompra(c) {
       ${!bloqueado?`<button class="btn btn-primary" id="btn-save" onclick="saveCompra()">${isNew?'+ Registrar Compra':'✓ Salvar Alterações'}</button>`:''}
       ${!isNew && status==='PENDENTE'?`<button class="btn btn-primary" style="background:var(--accent2);" onclick="abrirLiberacaoCompra(${c.id_compra})">Liberar Entrada</button>`:''}
       ${!isNew && status==='LIBERADA'?`<button class="btn btn-secondary" onclick="reabrirCompra(${c.id_compra})">Reabrir para Alterar</button><button class="btn btn-danger" onclick="cancelarCompra(${c.id_compra})">Cancelar Entrada</button>`:''}
+      ${!isNew && status==='CANCELADA'?`<button class="btn btn-primary" onclick="reativarCompraCancelada(${c.id_compra})">Alterar e liberar novamente</button>`:''}
       ${!isNew?`<button class="btn btn-danger" onclick="excluirCompra(${c.id_compra})">Excluir</button>`:''}
       <button class="btn btn-secondary" onclick="cancelForm()">Voltar</button>
     </div>`;
 
   renderItensCompra(status);
   if(!bloqueado) filtrarProdutosPedido('compra');
+  ativarSeletorPesquisavel('f-id_fornecedor','Digite parte do nome do fornecedor...');
 }
 
 function preencherCompraProduto() {
@@ -1138,6 +1196,18 @@ async function cancelarCompra(idCompra) {
   openItem(idCompra);
 }
 
+async function reativarCompraCancelada(idCompra) {
+  const compra = items.find(x=>Number(x.id_compra)===Number(idCompra));
+  if(!compra || compra.status_compra!=='CANCELADA') return;
+  if(!confirm('Voltar esta compra para pendente, permitir alteracoes e liberar a entrada novamente?')) return;
+  const res=await apiPatch(`compras?id_compra=eq.${idCompra}`,{status_compra:'PENDENTE'});
+  if(!res.ok){toast('Erro ao reativar compra: '+(res.data?.message||'erro'),'error');return;}
+  toast('Compra liberada para alteracoes e nova entrada.','success');
+  await loadCaches();
+  await loadItems();
+  openItem(idCompra);
+}
+
 async function excluirCompra(idCompra) {
   const compra = items.find(x=>Number(x.id_compra)===Number(idCompra));
   if(!compra) return;
@@ -1155,6 +1225,7 @@ async function excluirCompra(idCompra) {
 
 async function renderFormContaPagar(c) {
   await Promise.all([loadCaches(), loadCacheCobrancas()]);
+  const integracaoFinancasAtiva=typeof empresaIntegraFinancas==='function'&&await empresaIntegraFinancas();
   const v = f => c ? (c[f]??'') : '';
   const fornOpts = cacheFornecedores.map(f=>{
     const selecionado=String(v('id_fornecedor'))===String(f.id_fornecedor);
@@ -1195,10 +1266,12 @@ async function renderFormContaPagar(c) {
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
       ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
       ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">Pago</span>') : ''}
+      ${integracaoFinancasAtiva&&c?.status_pagamento==='PAGO'&&!c?.id_movimento_financas?`<button type="button" class="btn btn-primary" onclick="sincronizarContaPagaFinancas(${c.id_conta_pagar})">Enviar ao Financas</button>`:''}
       ${valorPagoAtual > 0.005 || c?.status_pagamento==='PAGO' ? '<button type="button" class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>' : ''}
       ${c?.id_compra ? `<button class="btn btn-secondary" onclick="mostrarResumoCompraConta(${c.id_compra},event)">Resumo da compra</button>` : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Voltar</button>
     </div>`;
+  ativarSeletorPesquisavel('f-id_fornecedor','Digite parte do nome do fornecedor...');
 }
 
 async function excluirContaPagar() {
@@ -1279,19 +1352,80 @@ async function saveContaPagar() {
   openItem(currentId);
 }
 
+async function prepararIntegracaoBaixaContaPagar(conta,atualizarFinancas=true,dataInicial=null,mensagemConfirmacao=''){
+  let integracao={ativa:false,contas:[],categoria:null};
+  if(atualizarFinancas){
+    try{integracao=await carregarIntegracaoFinancas('saida');}
+    catch(e){return {ok:false,message:'Nao foi possivel consultar o Financas: '+(e.message||e)};}
+  }
+  const dados=await solicitarContaFinancasPagamento(integracao.ativa?integracao.contas:[],conta?.id_conta_financas,dataInicial,{atualizarFinancas,mensagemConfirmacao});
+  if(!dados)return {ok:false,cancelada:true,message:'Baixa cancelada.'};
+  return {ok:true,ativa:integracao.ativa&&dados.atualizarFinancas,atualizarFinancas:dados.atualizarFinancas,contaId:dados.contaId||null,dataPagamento:dados.dataPagamento,integracao};
+}
+
+function solicitarContaFinancasPagamento(contas,selecionada,dataInicial=null,opcoes={}){
+  return new Promise(resolve=>{
+    const exigeConta=Array.isArray(contas)&&contas.length>0;
+    const permiteEscolher=!!opcoes.mensagemConfirmacao;
+    const dataBase=dataInicial?new Date(dataInicial):new Date();
+    const dataLocal=new Date(dataBase.getTime()-dataBase.getTimezoneOffset()*60000).toISOString().slice(0,16);
+    document.getElementById('selecionar-conta-financas-pagamento')?.remove();
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';modal.id='selecionar-conta-financas-pagamento';modal.style.display='flex';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar pagamento</span></div><div class="modal-body">${opcoes.mensagemConfirmacao?'<div style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;" data-mensagem></div>':''}${permiteEscolher?`<label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas ${opcoes.atualizarFinancas!==false?'checked':''} style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Pagar.</small></span></label>`:''}<div data-grupo-conta>${exigeConta?`<div class="form-group"><label class="form-label">De qual conta este pagamento saiu? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(contas,selecionada)}</select></div>`:''}</div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data de efetivacao / pagamento *</label><input class="form-input" type="datetime-local" data-data-pagamento value="${dataLocal}"></div><div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">Informe a data em que o titulo realmente foi pago.${exigeConta?' Confira tambem a conta ao atualizar o Financas.':''}</div></div><div class="modal-footer"><button class="btn btn-secondary" data-cancelar>Cancelar</button><button class="btn btn-primary" data-confirmar>Confirmar pagamento</button></div></div>`;
+    if(opcoes.mensagemConfirmacao)modal.querySelector('[data-mensagem]').textContent=opcoes.mensagemConfirmacao;
+    const campoAtualizar=modal.querySelector('[data-atualizar-financas]');
+    const atualizarVisibilidadeConta=()=>{const grupo=modal.querySelector('[data-grupo-conta]');if(grupo)grupo.style.display=(!campoAtualizar||campoAtualizar.checked)?'block':'none';};
+    campoAtualizar?.addEventListener('change',atualizarVisibilidadeConta);
+    atualizarVisibilidadeConta();
+    const concluir=v=>{modal.remove();resolve(v);};
+    modal.querySelector('[data-cancelar]').onclick=()=>concluir(null);
+    modal.querySelector('[data-confirmar]').onclick=()=>{
+      const atualizarFinancas=campoAtualizar?campoAtualizar.checked:opcoes.atualizarFinancas!==false;
+      const id=Number(modal.querySelector('[data-conta]')?.value||0);
+      if(atualizarFinancas&&exigeConta&&!id){toast('Selecione a conta do Financas.','error');return;}
+      const valorData=modal.querySelector('[data-data-pagamento]')?.value;
+      const dataPagamento=valorData?new Date(valorData):null;
+      if(!dataPagamento||Number.isNaN(dataPagamento.getTime())){toast('Informe uma data de pagamento valida.','error');return;}
+      concluir({atualizarFinancas,contaId:atualizarFinancas?(id||null):null,dataPagamento:dataPagamento.toISOString()});
+    };
+    modal.addEventListener('click',e=>{if(e.target===modal)concluir(null);});
+    document.body.appendChild(modal);
+  });
+}
+
+async function garantirMovimentoContaPagarFinancas(titulo,financeiro){
+  if(!financeiro?.ativa)return {ok:true};
+  let atualizado=titulo;
+  if(!atualizado?.id_movimento_financas){
+    const vinculo=await vincularMovimentosFinancas('contas_pagar','id_conta_pagar',[atualizado],{ativa:true,tipo:'saida',contaId:financeiro.contaId,categoria:financeiro.integracao.categoria,descricao:`Pagamento #${atualizado.id_conta_pagar}`,documento:null});
+    if(!vinculo.ok)return vinculo;
+    const lista=await apiGet(`contas_pagar?select=*&id_conta_pagar=eq.${atualizado.id_conta_pagar}&limit=1`);
+    atualizado=Array.isArray(lista)?lista[0]:null;
+  }
+  try{if(atualizado)await sincronizarTituloFinanceiroAposAlteracao('contas_pagar',atualizado);return {ok:true};}
+  catch(e){return {ok:false,message:e.message||String(e)};}
+}
+
 async function marcarContaPagarPaga() {
   const valor = Number(document.getElementById('f-valor_pago')?.value||0) || Number(document.getElementById('f-valor_original')?.value||0);
   const dataInformada = document.getElementById('f-data_pagamento')?.value;
   const dataPagamento = dataInformada ? new Date(dataInformada) : new Date();
   if(Number.isNaN(dataPagamento.getTime())) { toast('Informe uma data de pagamento válida.','error'); return; }
   const atualizarFinancas=baixaAtualizaFinancas();
+  const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
+  const financeiro=await prepararIntegracaoBaixaContaPagar(conta,atualizarFinancas,dataPagamento.toISOString());
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{
     status_pagamento:'PAGO',
     valor_pago: valor,
-    data_pagamento: dataPagamento.toISOString(),
-    meio_pagamento: document.getElementById('f-meio_pagamento')?.value||null
+    data_pagamento: financeiro.dataPagamento,
+    meio_pagamento: document.getElementById('f-meio_pagamento')?.value||null,
+    ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
   },{sincronizarFinancas:atualizarFinancas});
   if(!res.ok){ toast('Erro ao marcar como pago.','error'); return; }
+  const sincronizacao=await garantirMovimentoContaPagarFinancas(res.data?.[0]||conta,financeiro);
+  if(!sincronizacao.ok){toast('Pagamento salvo, mas o Financas nao foi atualizado: '+sincronizacao.message,'error');await loadItems();openItem(currentId);return;}
   toast(`Pagamento confirmado${atualizarFinancas?' e atualizado no Finanças':' sem atualizar o Finanças'}.`,'success');
   await loadItems();
   openItem(currentId);
@@ -1307,23 +1441,41 @@ async function marcarContaPagarPagaRapido(idConta, event) {
   if(!conta || saldo<=0.005 || conta.status_pagamento==='PAGO') { toast('Esta conta já está paga.','info'); return; }
   const fornecedor = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(conta.id_fornecedor));
   const nome = fornecedor?.nome_fantasia || fornecedor?.razao_social || `Conta #${idConta}`;
-  const confirmacao=await confirmarBaixaComOpcaoFinancas(`Marcar como pago ${compraFmt(saldo)} de ${nome}?`);
-  if(!confirmacao)return;
+  const financeiro=await prepararIntegracaoBaixaContaPagar(conta,true,null,`Marcar como pago ${compraFmt(saldo)} de ${nome}?`);
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
+  const atualizarFinancas=financeiro.atualizarFinancas;
   if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
   const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${idConta}`,{
     status_pagamento:'PAGO',
     valor_pago:original,
-    data_pagamento:new Date().toISOString(),
-    meio_pagamento:conta.meio_pagamento||null
-  },{sincronizarFinancas:confirmacao.atualizarFinancas});
+    data_pagamento:financeiro.dataPagamento,
+    meio_pagamento:conta.meio_pagamento||null,
+    ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
+  },{sincronizarFinancas:atualizarFinancas});
   if(!res.ok) {
     if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
     toast('Erro ao marcar como pago: '+(res.data?.message||'erro'),'error');
     return;
   }
-  toast(`Pagamento confirmado: ${compraFmt(saldo)}${confirmacao.atualizarFinancas?'':' (sem atualizar o Finanças)'}.`,'success');
+  toast(`Pagamento confirmado: ${compraFmt(saldo)}${atualizarFinancas?'':' (sem atualizar o Finanças)'}.`,'success');
+  const sincronizacao=await garantirMovimentoContaPagarFinancas(res.data?.[0]||conta,financeiro);
+  if(!sincronizacao.ok){toast('Pagamento salvo, mas o Financas nao foi atualizado: '+sincronizacao.message,'error');await renderDashboardContasPagar();return;}
   currentId=null;
   await renderDashboardContasPagar();
+}
+
+async function sincronizarContaPagaFinancas(idConta){
+  const conta=items.find(x=>Number(x.id_conta_pagar)===Number(idConta));
+  if(!conta){toast('Conta nao encontrada.','error');return;}
+  const financeiro=await prepararIntegracaoBaixaContaPagar(conta,true,conta.data_pagamento||new Date().toISOString());
+  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
+  const salvo=await apiPatch(`contas_pagar?id_conta_pagar=eq.${idConta}`,{id_conta_financas:financeiro.contaId,data_pagamento:financeiro.dataPagamento},{sincronizarFinancas:false});
+  if(!salvo.ok){toast('Nao foi possivel salvar a conta e a data do pagamento.','error');return;}
+  const sincronizacao=await garantirMovimentoContaPagarFinancas(salvo.data?.[0]||{...conta,id_conta_financas:financeiro.contaId,data_pagamento:financeiro.dataPagamento},financeiro);
+  if(!sincronizacao.ok){toast('Nao foi possivel enviar ao Financas: '+sincronizacao.message,'error');return;}
+  toast('Pagamento enviado e efetivado no Financas.','success');
+  await loadItems();
+  openItem(idConta);
 }
 
 async function reativarContaPagar() {

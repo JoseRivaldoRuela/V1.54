@@ -52,6 +52,8 @@ let contasPagarResumoModo = 'mes';
 let contasPagarResumoOffset = 0;
 let comprasResumoModo = 'mes';
 let comprasResumoOffset = 0;
+let comprasDashPeriodo = '7'; // mes | 7 | 15 | 30 dias
+let comprasDashMesOffset = 0; // 0 = mes atual, -1 = mes anterior
 let contasReceberMostrarTodos = false; // lista lateral: abertos por padrao
 let contasReceberClienteFiltro = null; // lista lateral: visão por cliente
 let contasReceberResumoModo = 'mes';

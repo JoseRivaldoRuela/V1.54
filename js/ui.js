@@ -421,7 +421,16 @@ function filtrarLateralCompras(lista, termo='') {
     const data=String(c.data_compra||'').slice(0,10);
     return data>=periodo.inicio && data<periodo.fim;
   });
-  return termo ? base.filter(c=>itemContemBusca(c,termo,fields)) : base;
+  const resultado=termo ? base.filter(c=>itemContemBusca(c,termo,fields)) : base;
+  return resultado.sort((a,b)=>{
+    const pendenteA=String(a.status_compra||'PENDENTE').toUpperCase()==='PENDENTE';
+    const pendenteB=String(b.status_compra||'PENDENTE').toUpperCase()==='PENDENTE';
+    if(pendenteA!==pendenteB)return pendenteA?-1:1;
+    const dataA=String(a.data_compra||'');
+    const dataB=String(b.data_compra||'');
+    if(dataA!==dataB)return dataB.localeCompare(dataA);
+    return Number(b.id_compra||0)-Number(a.id_compra||0);
+  });
 }
 
 function toggleLateralContasReceber() {
@@ -1003,3 +1012,20 @@ async function init(){
 
 
 init();
+function ativarSeletorPesquisavel(selectId, placeholder='Digite para buscar...') {
+  const select=document.getElementById(selectId);
+  if(!select||select.dataset.pesquisavel==='1')return;
+  select.dataset.pesquisavel='1'; select.style.display='none';
+  let opcoes=[...select.options].filter(o=>o.value).map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}));
+  const atual=opcoes.find(o=>o.value===select.value), wrap=document.createElement('div'), input=document.createElement('input'), lista=document.createElement('div');
+  wrap.className='seletor-pesquisavel'; wrap.style.cssText='position:relative;flex:1;min-width:0;'; input.type='text'; input.className='form-input'; input.autocomplete='off'; input.placeholder=placeholder; input.value=atual?.label||''; input.disabled=select.disabled;
+  lista.style.cssText='display:none;position:absolute;z-index:1000;left:0;right:0;top:calc(100% + 3px);max-height:240px;overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.25);';
+  const normalizar=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(), fechar=()=>lista.style.display='none';
+  const escolher=o=>{select.value=o.value;input.value=o.label;fechar();select.dispatchEvent(new Event('change',{bubbles:true}));};
+  const render=()=>{const termo=normalizar(input.value.trim()), encontrados=opcoes.filter(o=>!o.disabled&&(!termo||normalizar(o.label).includes(termo))).slice(0,80);lista.replaceChildren();if(!encontrados.length){const vazio=document.createElement('div');vazio.textContent='Nenhum resultado';vazio.style.cssText='padding:10px;color:var(--text3);font-size:12px;';lista.appendChild(vazio);}encontrados.forEach(o=>{const item=document.createElement('button');item.type='button';item.textContent=o.label;item.style.cssText='display:block;width:100%;padding:9px 11px;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--border);color:var(--text);cursor:pointer;';item.onmousedown=e=>{e.preventDefault();escolher(o);};lista.appendChild(item);});lista.style.display='block';};
+  input.addEventListener('focus',render); input.addEventListener('input',()=>{select.value='';render();});
+  input.addEventListener('keydown',e=>{if(e.key==='Escape')fechar();if(e.key==='Enter'){e.preventDefault();const primeiro=lista.querySelector('button');if(primeiro)primeiro.dispatchEvent(new MouseEvent('mousedown'));}});
+  input.addEventListener('blur',()=>setTimeout(()=>{if(!select.value)input.value='';fechar();},150));
+  select.addEventListener('change',()=>{opcoes=[...select.options].filter(o=>o.value).map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}));const escolhida=opcoes.find(o=>o.value===select.value);input.value=escolhida?.label||'';});
+  select.parentNode.insertBefore(wrap,select); wrap.append(input,lista,select);
+}

@@ -139,8 +139,10 @@
       const tipo=select.dataset.quickType||tiposPorId[select.id];
       if(!tipo||select.dataset.quickReady==='1') return;
       select.dataset.quickReady='1';
+      const pesquisa=select.closest('.seletor-pesquisavel');
       const wrap=document.createElement('div'); wrap.className='quick-select-wrap';
-      select.parentNode.insertBefore(wrap,select); wrap.appendChild(select);
+      const alvo=pesquisa||select;
+      alvo.parentNode.insertBefore(wrap,alvo); wrap.appendChild(alvo);
       const btn=document.createElement('button'); btn.type='button'; btn.className='quick-add-btn'; btn.textContent='+';
       btn.title='Cadastrar rapidamente e selecionar'; btn.setAttribute('aria-label','Cadastrar rapidamente e selecionar');
       btn.disabled=select.disabled; btn.onclick=()=>abrirCadastroRapido(tipo,select); wrap.appendChild(btn);

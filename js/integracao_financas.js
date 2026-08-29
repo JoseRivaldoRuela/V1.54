@@ -39,8 +39,9 @@ async function empresaIntegraFinancas(){
 
 async function carregarIntegracaoFinancas(uso){
   if(!await empresaIntegraFinancas())return {ativa:false,contas:[],categoria:null};
+  const filtroTipo=uso==='saida'?'':'&tipo=neq.cartao';
   const [contas,categorias]=await Promise.all([
-    financasRequest('contas?select=id_conta,nome,tipo,ativo&ativo=eq.true&tipo=neq.cartao&order=nome'),
+    financasRequest(`contas?select=id_conta,nome,tipo,ativo&ativo=eq.true${filtroTipo}&order=nome`),
     financasRequest(`categorias?select=id_categoria,nome,uso,ativo&ativo=eq.true&uso=eq.${uso}&order=nome`)
   ]);
   const nomeCategoria=uso==='entrada'?'vendas':'compras';
@@ -53,7 +54,7 @@ async function carregarIntegracaoFinancas(uso){
 }
 
 function opcoesContasFinancas(contas,selecionada=''){
-  return `<option value="">Selecione...</option>${contas.map(c=>`<option value="${c.id_conta}" ${String(c.id_conta)===String(selecionada)?'selected':''}>${compraEsc?compraEsc(c.nome):c.nome}</option>`).join('')}`;
+  return `<option value="">Selecione...</option>${contas.map(c=>`<option value="${c.id_conta}" ${String(c.id_conta)===String(selecionada)?'selected':''}>${compraEsc?compraEsc(c.nome):c.nome}${String(c.tipo||'').toLowerCase()==='cartao'?' (cartao)':''}</option>`).join('')}`;
 }
 
 async function criarMovimentoFinancas({tipo,contaId,categoriaId,valor,descricao,dataVencimento,documento,observacoes}){

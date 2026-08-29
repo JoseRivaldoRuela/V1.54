@@ -2,6 +2,11 @@
 let itemVendaEmEdicao = null;
 let itensVendaEditaveis = true;
 
+function historicoMensalVendas(){return window.HISTORICO_MENSAL_ANTIGO?.registros||[];}
+function historicoVendaMes(chave){return historicoMensalVendas().find(x=>x.mes===chave)||null;}
+function historicosRanking(ano,mes,modo){return historicoMensalVendas().filter(x=>Number(x.mes.slice(0,4))===Number(ano)&&(modo==='ano'||Number(x.mes.slice(5,7))-1===Number(mes)));}
+function vendasSinteticasHistorico(registro){return registro?Array.from({length:registro.qtd},(_,i)=>({valor_final:i===0?registro.faturamento:0,status_entrega:'ENTREGUE',_historico:true})):[];}
+
 async function renderDashboard() {
   const body = document.getElementById('content-body');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
@@ -40,6 +45,8 @@ async function renderDashboard() {
     const d = dataVendaLocal(v);
     return d >= inicioMesAnterior && d < fimMesAnterior;
   });
+  vendasMes.push(...vendasSinteticasHistorico(historicoVendaMes(inicioMesRef.slice(0,7))));
+  vendasMesAnterior.push(...vendasSinteticasHistorico(historicoVendaMes(inicioMesAnterior.slice(0,7))));
   const pendentes = todasVendas.filter(v => v.status_entrega !== 'ENTREGUE' && v.status_entrega !== 'CANCELADO');
 
   const soma = arr => arr.reduce((s,v) => s + Number(v.valor_final||0), 0);
@@ -52,6 +59,10 @@ async function renderDashboard() {
   const resumoSemana = resumoStatus(vendasSemana);
   const resumoMes = resumoStatus(vendasMes);
   const resumoMesAnterior = resumoStatus(vendasMesAnterior);
+  const historicoResumoMes=historicoVendaMes(inicioMesRef.slice(0,7));
+  const lucroMesSelecionado=resumoMes.ativas.filter(v=>!v._historico).reduce((s,v)=>s+Number(v.valor_final||0)-Number(v.valor_produtos||0),0)+Number(historicoResumoMes?.lucro||0);
+  const faturamentoMesSelecionado=soma(resumoMes.ativas);
+  const margemMesSelecionado=faturamentoMesSelecionado>0?lucroMesSelecionado/faturamentoMesSelecionado*100:0;
   const variacaoMes = soma(resumoMesAnterior.ativas) > 0 ? ((soma(resumoMes.ativas)-soma(resumoMesAnterior.ativas))/soma(resumoMesAnterior.ativas)*100) : null;
   const fmt = n => 'R$ ' + Number(n).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
   const linhasStatus = resumo => `
@@ -65,12 +76,13 @@ async function renderDashboard() {
         <span style="font-weight:700;font-family:var(--mono);">${fmt(soma(resumo.pendentes))}</span>
       </div>
     </div>`;
+  const linhasMesSelecionado=historicoResumoMes?`<div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);font-size:11px;"><span style="color:var(--accent2);font-weight:700;">Histórico consolidado</span><span style="font-weight:700;">${historicoResumoMes.qtd} pedidos</span></div>`:linhasStatus(resumoMes);
 
   // Rankings de clientes e produtos por mes ou ano selecionado
   const anosRanking = [...new Set(todasVendas.map(v => {
     const data=dataVendaLocal(v);
     return data ? Number(data.slice(0,4)) : null;
-  }).filter(Boolean))].sort((a,b)=>b-a);
+  }).filter(Boolean).concat(historicoMensalVendas().map(x=>Number(x.mes.slice(0,4)))))].sort((a,b)=>b-a);
   if(!anosRanking.includes(dashRankingAno)) anosRanking.push(dashRankingAno);
   anosRanking.sort((a,b)=>b-a);
   const vendasRanking = todasVendas.filter(v => {
@@ -94,6 +106,10 @@ async function renderDashboard() {
     clienteMap[nome].total += Number(v.valor_final||0);
     clienteMap[nome].qtd++;
   });
+  historicosRanking(dashRankingAno,dashRankingMes,dashRankingModo).forEach(h=>h.clientes.forEach(c=>{
+    if(!clienteMap[c.nome])clienteMap[c.nome]={nome:c.nome,total:0,qtd:0,id:0,_historico:true};
+    clienteMap[c.nome].total+=Number(c.total||0);
+  }));
   const topClientes = Object.values(clienteMap).sort((a,b)=>b.total-a.total).slice(0,5);
 
   // Top produtos
@@ -104,18 +120,47 @@ async function renderDashboard() {
     prodMap[nome].total += Number(i.subtotal||0);
     prodMap[nome].qtd += Number(i.quantidade||0);
   });
-  const topProdutos = Object.values(prodMap).sort((a,b)=>b.total-a.total).slice(0,5);
+  const rankingHistoricoSelecionado=historicosRanking(dashRankingAno,dashRankingMes,dashRankingModo);
+  rankingHistoricoSelecionado.forEach(h=>h.produtos.forEach(p=>{
+    if(!prodMap[p.nome])prodMap[p.nome]={nome:p.nome,total:0,qtd:0,id:0,_historico:true};
+    prodMap[p.nome].qtd+=Number(p.qtd||0); prodMap[p.nome]._historico=true;
+  }));
+  const topProdutos = Object.values(prodMap).sort((a,b)=>rankingHistoricoSelecionado.length?b.qtd-a.qtd:b.total-a.total).slice(0,5);
 
   // Dados para gráfico de linha (últimos N dias)
-  const dias = parseInt(dashPeriodo);
-  const labels = [], valores = [];
-  for(let i=dias-1; i>=0; i--) {
-    const d = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()-i);
-    const ds = fmtDataLocal(d);
-    const diaSemana=d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','');
-    labels.push(`${diaSemana} ${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}`);
-    const total = todasVendas.filter(v=>dataVendaLocal(v)===ds).reduce((s,v)=>s+Number(v.valor_final||0),0);
-    valores.push(total);
+  const labels = [], valores = [], detalhesClientes = [];
+  const historicoMesSelecionado=historicoVendaMes(inicioMesRef.slice(0,7));
+  if(dashPeriodo==='mes'&&historicoMesSelecionado){
+    labels.push(`Resumo ${mesRef.toLocaleDateString('pt-BR',{month:'short',year:'numeric'}).replace('.','')}`);
+    valores.push(soma(resumoMes.ativas));
+    detalhesClientes.push(historicoMesSelecionado.clientes.map(c=>`${c.nome}: ${fmt(c.total)}`).concat(['Ranking disponível: 5 maiores clientes']));
+  }else if(dashPeriodo==='mes'){
+    const diasNoMes=new Date(mesRef.getFullYear(),mesRef.getMonth()+1,0).getDate();
+    for(let dia=1;dia<=diasNoMes;dia++){
+      const d=new Date(mesRef.getFullYear(),mesRef.getMonth(),dia), ds=fmtDataLocal(d);
+      labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
+      const vendasDia=todasVendas.filter(v=>dataVendaLocal(v)===ds&&v.status_entrega!=='CANCELADO');
+      valores.push(vendasDia.reduce((s,v)=>s+Number(v.valor_final||0),0));
+      const porCliente={};
+      vendasDia.forEach(v=>{const nome=v.clientes?.nome_fantasia||v.clientes?.razao_social||`Cliente #${v.id_cliente||'-'}`;porCliente[nome]=(porCliente[nome]||0)+Number(v.valor_final||0);});
+      const clientesDia=Object.entries(porCliente).sort((a,b)=>b[1]-a[1]);
+      const linhas=clientesDia.slice(0,10).map(([nome,total])=>`${nome}: ${fmt(total)}`);
+      if(clientesDia.length>10)linhas.push(`+ ${clientesDia.length-10} cliente(s)`);
+      detalhesClientes.push(linhas);
+    }
+  }else{
+    const dias=Math.max(1,Number(dashPeriodo||7));
+    for(let i=dias-1;i>=0;i--){
+      const d=new Date(hoje.getFullYear(),hoje.getMonth(),hoje.getDate()-i),ds=fmtDataLocal(d);
+      const vendasDia=todasVendas.filter(v=>dataVendaLocal(v)===ds&&v.status_entrega!=='CANCELADO');
+      labels.push(`${d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','')} ${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}`);
+      valores.push(vendasDia.reduce((s,v)=>s+Number(v.valor_final||0),0));
+      const porCliente={};
+      vendasDia.forEach(v=>{const nome=v.clientes?.nome_fantasia||v.clientes?.razao_social||`Cliente #${v.id_cliente||'-'}`;porCliente[nome]=(porCliente[nome]||0)+Number(v.valor_final||0);});
+      const clientesDia=Object.entries(porCliente).sort((a,b)=>b[1]-a[1]),linhas=clientesDia.slice(0,10).map(([nome,total])=>`${nome}: ${fmt(total)}`);
+      if(clientesDia.length>10)linhas.push(`+ ${clientesDia.length-10} cliente(s)`);
+      detalhesClientes.push(linhas);
+    }
   }
 
   // Renderizar HTML
@@ -125,6 +170,7 @@ async function renderDashboard() {
       <button class="dash-period-btn ${dashMesOffset===0?'active':''}" onclick="irMesAtualDashboard()">Mês atual</button>
       <button class="dash-period-btn" onclick="mudarMesDashboard(1)" ${dashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Próximo mês ›</button>
       <button class="dash-period-btn" onclick="renderComparativoVendas()">Comparar meses</button>
+      <button class="dash-period-btn" onclick="renderRankingMesesVendas()">Ranking / sequência de meses</button>
       <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${labelMesRef}</span>
     </div>
     <!-- Cards de totais -->
@@ -132,17 +178,24 @@ async function renderDashboard() {
       <div class="dash-card green" onclick="filtrarVendasDash('hoje')">
         <div class="dash-card-label">Vendas Hoje</div>
         <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoHoje.ativas))}</div>
+        <div class="dash-card-sub" style="margin-top:5px;font-weight:700;">${resumoHoje.ativas.length} pedido${resumoHoje.ativas.length!==1?'s':''}</div>
         ${linhasStatus(resumoHoje)}
       </div>
       <div class="dash-card blue" onclick="filtrarVendasDash('semana')">
         <div class="dash-card-label">Últimos 7 Dias</div>
         <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoSemana.ativas))}</div>
+        <div class="dash-card-sub" style="margin-top:5px;font-weight:700;">${resumoSemana.ativas.length} pedido${resumoSemana.ativas.length!==1?'s':''}</div>
         ${linhasStatus(resumoSemana)}
       </div>
-      <div class="dash-card orange" onclick="filtrarVendasDash('mes')">
+      <div class="dash-card orange" onclick="${historicoResumoMes?`mostrarResumoHistoricoMes('${historicoResumoMes.mes}')`:`filtrarVendasDash('mes')`}">
         <div class="dash-card-label">Mês Selecionado</div>
         <div class="dash-card-value" style="font-size:20px;line-height:1.15;">${fmt(soma(resumoMes.ativas))}</div>
-        ${linhasStatus(resumoMes)}
+        <div class="dash-card-sub" style="margin-top:5px;font-weight:700;">${resumoMes.ativas.length} pedido${resumoMes.ativas.length!==1?'s':''}</div>
+        ${linhasMesSelecionado}
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:11px;">
+          <span style="color:var(--text2);font-weight:700;">Lucro do mês</span>
+          <span style="color:${lucroMesSelecionado>=0?'var(--accent)':'var(--danger)'};font-weight:800;font-family:var(--mono);">${fmt(lucroMesSelecionado)} <small style="font-weight:500;">(${margemMesSelecionado.toFixed(1)}%)</small></span>
+        </div>
         <div style="margin-top:6px;font-size:10px;color:var(--text2);display:flex;justify-content:space-between;gap:8px;">
           <span>Anterior ${fmt(soma(resumoMesAnterior.ativas))}</span>
           <span style="color:${variacaoMes===null?'var(--text3)':variacaoMes>=0?'var(--accent)':'var(--danger)'};">${variacaoMes===null?'sem base':(variacaoMes>=0?'+':'')+variacaoMes.toFixed(1)+'%'}</span>
@@ -159,8 +212,9 @@ async function renderDashboard() {
     <div class="dash-charts">
       <div class="dash-chart-box">
         <div class="dash-chart-title">
-          <span>📈 Vendas por Período</span>
+          <span>📈 ${dashPeriodo==='mes'?'Vendas do Mês Selecionado':'Vendas por Período'}</span>
           <div class="dash-chart-period">
+            <button class="dash-period-btn ${dashPeriodo==='mes'?'active':''}" onclick="mudarPeriodo('mes')">Mês</button>
             <button class="dash-period-btn ${dashPeriodo==='7'?'active':''}" onclick="mudarPeriodo('7')">7d</button>
             <button class="dash-period-btn ${dashPeriodo==='15'?'active':''}" onclick="mudarPeriodo('15')">15d</button>
             <button class="dash-period-btn ${dashPeriodo==='30'?'active':''}" onclick="mudarPeriodo('30')">30d</button>
@@ -185,7 +239,7 @@ async function renderDashboard() {
           ${topClientes.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;">Nenhum dado</div>' :
           topClientes.map((c,i) => {
             const pct = topClientes[0].total > 0 ? (c.total/topClientes[0].total*100).toFixed(0) : 0;
-            return `<div class="dash-list-item" onclick="filtrarClienteDash(${c.id},'${c.nome.replace(/'/g,"\'")}')">
+            return `<div class="dash-list-item" ${c.id?`onclick="filtrarClienteDash(${c.id},'${c.nome.replace(/'/g,"\'")}')"`:'style="cursor:default;" title="Resumo histórico sem pedidos individuais"'}>
               <span class="dash-list-rank">${i+1}</span>
               <div style="flex:1;min-width:0;">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -206,15 +260,17 @@ async function renderDashboard() {
       <div class="dash-two-col" id="dash-produtos">
         ${topProdutos.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;grid-column:1/-1;">Nenhum dado</div>' :
         topProdutos.map((p,i) => {
-          const pct = topProdutos[0].total > 0 ? (p.total/topProdutos[0].total*100).toFixed(0) : 0;
-          return `<div class="dash-list-item" onclick="filtrarProdutoDash(${p.id},'${p.nome.replace(/'/g,"\'")}')">
+          const baseRanking=rankingHistoricoSelecionado.length?topProdutos[0].qtd:topProdutos[0].total;
+          const valorRanking=rankingHistoricoSelecionado.length?p.qtd:p.total;
+          const pct = baseRanking > 0 ? (valorRanking/baseRanking*100).toFixed(0) : 0;
+          return `<div class="dash-list-item" ${p.id?`onclick="filtrarProdutoDash(${p.id},'${p.nome.replace(/'/g,"\'")}')"`:'style="cursor:default;" title="Resumo histórico sem pedidos individuais"'}>
             <span class="dash-list-rank">${i+1}</span>
             <div style="flex:1;min-width:0;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span class="dash-list-name">${p.nome}</span>
-                <span class="dash-list-value">${fmt(p.total)}</span>
+                <span class="dash-list-value">${p.total>0?fmt(p.total):p.qtd.toLocaleString('pt-BR',{maximumFractionDigits:1})+' un'}</span>
               </div>
-              <div style="font-size:11px;color:var(--text2);">${p.qtd.toFixed(1)} un vendidas</div>
+              <div style="font-size:11px;color:var(--text2);">${p.qtd.toFixed(1)} un vendidas${p._historico?' · ranking histórico por quantidade':''}</div>
               <div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${pct}%;background:var(--accent2)"></div></div>
             </div>
           </div>`;
@@ -250,7 +306,11 @@ async function renderDashboard() {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: ctx => 'R$ ' + Number(ctx.raw).toLocaleString('pt-BR',{minimumFractionDigits:2})
+              label: ctx => 'Total: R$ ' + Number(ctx.raw).toLocaleString('pt-BR',{minimumFractionDigits:2}),
+              afterLabel: ctx => {
+                const linhas=detalhesClientes[ctx.dataIndex]||[];
+                return linhas.length?['Clientes:',...linhas]:['Nenhuma venda neste dia'];
+              }
             }
           }
         },
@@ -272,17 +332,28 @@ async function mudarPeriodoRanking(modo, ano, mes) {
   dashRankingModo=modo==='ano'?'ano':'mes';
   dashRankingAno=Number(ano)||new Date().getFullYear();
   dashRankingMes=Math.max(0,Math.min(11,Number(mes)));
+  if(dashRankingModo==='mes'){
+    const hoje=new Date();
+    dashMesOffset=(dashRankingAno-hoje.getFullYear())*12+(dashRankingMes-hoje.getMonth());
+    if(dashMesOffset>0)dashMesOffset=0;
+    dashPeriodo='mes';
+  }
   await renderDashboard();
 }
 
 async function mudarMesDashboard(delta) {
   dashMesOffset += delta;
   if(dashMesOffset > 0) dashMesOffset = 0;
+  const ref=new Date(); ref.setDate(1); ref.setMonth(ref.getMonth()+dashMesOffset);
+  dashRankingModo='mes'; dashRankingAno=ref.getFullYear(); dashRankingMes=ref.getMonth();
+  dashPeriodo='mes';
   await renderDashboard();
 }
 
 async function irMesAtualDashboard() {
   dashMesOffset = 0;
+  const ref=new Date(); dashRankingModo='mes'; dashRankingAno=ref.getFullYear(); dashRankingMes=ref.getMonth();
+  dashPeriodo='mes';
   await renderDashboard();
 }
 
@@ -303,13 +374,14 @@ function buildMesesComparativo(vendas, modo, ano, mesesQtd) {
   return meses.map((mes, idx) => {
     const key = fmtKey(mes);
     const lista = vendas.filter(v => (v.data_venda||'').slice(0,7) === key);
-    const total = lista.reduce((s,v)=>s+Number(v.valor_final||0),0);
-    const custo = lista.reduce((s,v)=>s+Number(v.valor_produtos||0),0);
+    const historico=historicoVendaMes(key);
+    const total = lista.reduce((s,v)=>s+Number(v.valor_final||0),0)+Number(historico?.faturamento||0);
+    const custo = lista.reduce((s,v)=>s+Number(v.valor_produtos||0),0)+(historico?Number(historico.faturamento)-Number(historico.lucro):0);
     const lucroMes = total - custo;
     const anterior = idx > 0 ? meses[idx-1] : new Date(mes.getFullYear(), mes.getMonth()-1, 1);
     const keyAnterior = fmtKey(anterior);
     const listaAnterior = vendas.filter(v => (v.data_venda||'').slice(0,7) === keyAnterior);
-    const totalAnterior = listaAnterior.reduce((s,v)=>s+Number(v.valor_final||0),0);
+    const totalAnterior = listaAnterior.reduce((s,v)=>s+Number(v.valor_final||0),0)+Number(historicoVendaMes(keyAnterior)?.faturamento||0);
     const variacao = totalAnterior > 0 ? ((total-totalAnterior)/totalAnterior*100) : null;
     return {
       key,
@@ -318,7 +390,7 @@ function buildMesesComparativo(vendas, modo, ano, mesesQtd) {
       total,
       custo,
       lucro: lucroMes,
-      qtd: lista.length,
+      qtd: lista.length+Number(historico?.qtd||0),
       variacao
     };
   });
@@ -334,7 +406,7 @@ async function renderComparativoVendas() {
     return;
   }
 
-  const anos = [...new Set(vendas.map(v => v.data_venda ? new Date(v.data_venda).getFullYear() : null).filter(Boolean))].sort((a,b)=>b-a);
+  const anos = [...new Set(vendas.map(v => v.data_venda ? new Date(v.data_venda).getFullYear() : null).filter(Boolean).concat(historicoMensalVendas().map(x=>Number(x.mes.slice(0,4)))))].sort((a,b)=>b-a);
   if(!anos.includes(dashComparativoAno)) anos.unshift(dashComparativoAno);
   const mesesQtd = Math.max(1, Math.min(60, Number(dashComparativoMeses||12)));
   dashComparativoMeses = mesesQtd;
@@ -443,11 +515,76 @@ async function renderComparativoVendas() {
   }, 100);
 }
 
+async function renderRankingMesesVendas(){
+  const body=document.getElementById('content-body');
+  body.innerHTML='<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Calculando ranking...</div>';
+  const vendas=await apiGet('vendas?select=data_venda,valor_final,valor_produtos,status_entrega&order=data_venda.asc');
+  if(!Array.isArray(vendas)){body.innerHTML='<div class="empty-state"><p>Erro ao carregar as vendas.</p></div>';return;}
+  const mapa=new Map();
+  const obter=mes=>{if(!mapa.has(mes))mapa.set(mes,{mes,total:0,lucro:0,qtd:0});return mapa.get(mes);};
+  historicoMensalVendas().forEach(h=>{const m=obter(h.mes);m.total+=Number(h.faturamento||0);m.lucro+=Number(h.lucro||0);m.qtd+=Number(h.qtd||0);});
+  vendas.filter(v=>v.status_entrega!=='CANCELADO'&&v.data_venda).forEach(v=>{const m=obter(String(v.data_venda).slice(0,7));m.total+=Number(v.valor_final||0);m.lucro+=Number(v.valor_final||0)-Number(v.valor_produtos||0);m.qtd++;});
+  const anos=[...new Set([...mapa.keys()].map(k=>Number(k.slice(0,4))))].sort((a,b)=>b-a);
+  window.rankingMesesQtd=Math.max(1,Math.min(60,Number(window.rankingMesesQtd||5)));
+  window.rankingMesesEscopo=window.rankingMesesEscopo||'ano';
+  window.rankingMesesOrdem=window.rankingMesesOrdem||'maiores';
+  window.rankingMesesAno=Number(window.rankingMesesAno||anos[0]||new Date().getFullYear());
+  const candidatos=[...mapa.values()].filter(m=>window.rankingMesesEscopo==='todos'||Number(m.mes.slice(0,4))===window.rankingMesesAno);
+  let filtrados;
+  if(window.rankingMesesOrdem==='sequencia'){
+    const cronologicos=candidatos.sort((a,b)=>a.mes.localeCompare(b.mes));
+    filtrados=cronologicos.slice(-window.rankingMesesQtd);
+  }else filtrados=candidatos.sort((a,b)=>b.total-a.total).slice(0,window.rankingMesesQtd);
+  const maior=filtrados.reduce((max,m)=>Math.max(max,Number(m.total||0)),0);
+  const fmt=n=>'R$ '+Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  body.innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;"><button class="dash-period-btn" onclick="renderDashboard()">← Voltar</button><span style="font-size:15px;font-weight:700;">Ranking e sequência de meses</span></div>
+    <div class="dash-chart-box" style="margin-bottom:14px;padding:12px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end;">
+        <div class="form-group"><label class="form-label">Visualização</label><select class="form-input form-select" id="ranking-meses-ordem"><option value="maiores" ${window.rankingMesesOrdem==='maiores'?'selected':''}>Maiores vendas</option><option value="sequencia" ${window.rankingMesesOrdem==='sequencia'?'selected':''}>Sequência de meses</option></select></div>
+        <div class="form-group"><label class="form-label">Quantidade de meses</label><input class="form-input" id="ranking-meses-qtd" type="number" min="1" max="60" value="${window.rankingMesesQtd}"></div>
+        <div class="form-group"><label class="form-label">Período</label><select class="form-input form-select" id="ranking-meses-escopo" onchange="document.getElementById('ranking-meses-ano').disabled=this.value==='todos'"><option value="ano" ${window.rankingMesesEscopo==='ano'?'selected':''}>Um ano</option><option value="todos" ${window.rankingMesesEscopo==='todos'?'selected':''}>Todos os anos</option></select></div>
+        <div class="form-group"><label class="form-label">Ano</label><select class="form-input form-select" id="ranking-meses-ano" ${window.rankingMesesEscopo==='todos'?'disabled':''}>${anos.map(a=>`<option value="${a}" ${a===window.rankingMesesAno?'selected':''}>${a}</option>`).join('')}</select></div>
+        <button class="btn btn-primary" onclick="aplicarRankingMesesVendas()">Mostrar ranking</button>
+      </div>
+    </div>
+    <div class="dash-chart-box" style="margin-bottom:20px;">
+      <div class="dash-chart-title"><span>${window.rankingMesesOrdem==='maiores'?'🏆 Top '+filtrados.length+' meses por faturamento':'📅 '+filtrados.length+' meses em sequência'}</span><span style="font-size:11px;color:var(--text2);">${window.rankingMesesEscopo==='todos'?'Todo o histórico':'Ano '+window.rankingMesesAno}</span></div>
+      <div class="dash-list">${filtrados.length?filtrados.map((m,i)=>{const data=new Date(Number(m.mes.slice(0,4)),Number(m.mes.slice(5,7))-1,1),label=data.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),pct=maior?m.total/maior*100:0,ticket=m.qtd?m.total/m.qtd:0,margem=m.total?m.lucro/m.total*100:0;return `<div class="dash-list-item" style="cursor:pointer;" title="Abrir ${label} no dashboard" onclick="abrirMesRankingNoDashboard('${m.mes}')"><span class="dash-list-rank">${i+1}</span><div style="flex:1;min-width:0;"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span class="dash-list-name" style="text-transform:capitalize;">${label}</span><span class="dash-list-value">${fmt(m.total)}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text2);margin-top:4px;"><span>${m.qtd} pedidos</span><span>Ticket médio ${fmt(ticket)}</span><span>Lucro ${fmt(m.lucro)} (${margem.toFixed(1)}%)</span><span style="margin-left:auto;color:var(--accent);">Abrir mês →</span></div><div class="dash-list-bar"><div class="dash-list-bar-fill" style="width:${pct.toFixed(1)}%"></div></div></div></div>`;}).join(''):'<div class="empty-state"><p>Nenhum mês encontrado.</p></div>'}</div>
+    </div>`;
+}
+
+async function aplicarRankingMesesVendas(){
+  window.rankingMesesQtd=Math.max(1,Math.min(60,Number(document.getElementById('ranking-meses-qtd')?.value||5)));
+  window.rankingMesesEscopo=document.getElementById('ranking-meses-escopo')?.value==='todos'?'todos':'ano';
+  window.rankingMesesOrdem=document.getElementById('ranking-meses-ordem')?.value==='sequencia'?'sequencia':'maiores';
+  window.rankingMesesAno=Number(document.getElementById('ranking-meses-ano')?.value||new Date().getFullYear());
+  await renderRankingMesesVendas();
+}
+
+async function abrirMesRankingNoDashboard(chaveMes){
+  const partes=String(chaveMes||'').match(/^(\d{4})-(\d{2})$/);
+  if(!partes)return;
+  const ano=Number(partes[1]), mes=Number(partes[2])-1, hoje=new Date();
+  dashMesOffset=(ano-hoje.getFullYear())*12+(mes-hoje.getMonth());
+  if(dashMesOffset>0)dashMesOffset=0;
+  dashRankingModo='mes'; dashRankingAno=ano; dashRankingMes=mes;
+  dashPeriodo='mes';
+  await renderDashboard();
+}
+
 async function aplicarComparativoVendas(modo) {
   dashComparativoModo = modo;
   dashComparativoMeses = Math.max(1, Math.min(60, Number(document.getElementById('dash-comp-meses')?.value||12)));
   dashComparativoAno = Number(document.getElementById('dash-comp-ano')?.value||new Date().getFullYear());
   await renderComparativoVendas();
+}
+
+function mostrarResumoHistoricoMes(chaveMes){
+  const h=historicoVendaMes(chaveMes);if(!h)return;
+  const fmt=n=>'R$ '+Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const data=new Date(Number(chaveMes.slice(0,4)),Number(chaveMes.slice(5,7))-1,1), titulo=data.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),ticket=h.qtd?h.faturamento/h.qtd:0,margem=h.faturamento?h.lucro/h.faturamento*100:0;
+  document.getElementById('content-body').innerHTML=`<div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;"><button class="dash-period-btn" onclick="renderDashboard()">← Voltar</button><span style="font-size:16px;font-weight:700;text-transform:capitalize;">${titulo}</span><span class="pill" style="margin-left:auto;">Histórico consolidado</span></div><div class="dash-grid"><div class="dash-card green" style="cursor:default;"><div class="dash-card-label">Faturamento</div><div class="dash-card-value">${fmt(h.faturamento)}</div></div><div class="dash-card blue" style="cursor:default;"><div class="dash-card-label">Lucro</div><div class="dash-card-value">${fmt(h.lucro)}</div><div class="dash-card-sub">Margem ${margem.toFixed(1)}%</div></div><div class="dash-card orange" style="cursor:default;"><div class="dash-card-label">Pedidos</div><div class="dash-card-value">${h.qtd}</div><div class="dash-card-sub">Ticket ${fmt(ticket)}</div></div></div><div class="dash-charts"><div class="dash-chart-box"><div class="dash-chart-title"><span>🏆 5 melhores clientes</span></div><div class="dash-list">${h.clientes.map((c,i)=>`<div class="dash-list-item" style="cursor:default;"><span class="dash-list-rank">${i+1}</span><span class="dash-list-name" style="flex:1;">${c.nome}</span><span class="dash-list-value">${fmt(c.total)}</span></div>`).join('')}</div></div><div class="dash-chart-box"><div class="dash-chart-title"><span>📦 5 melhores produtos</span></div><div class="dash-list">${h.produtos.map((p,i)=>`<div class="dash-list-item" style="cursor:default;"><span class="dash-list-rank">${i+1}</span><span class="dash-list-name" style="flex:1;">${p.nome}</span><span class="dash-list-value">${Number(p.qtd).toLocaleString('pt-BR')} un</span></div>`).join('')}</div></div></div><div style="font-size:12px;color:var(--text2);margin-top:12px;">Este relatório preserva os totais e rankings disponíveis no sistema antigo. Não existem pedidos individuais para este mês.</div>`;
 }
 
 function filtrarVendasDash(filtro) {
@@ -777,7 +914,8 @@ async function renderFormVenda(c) {
         </div>
         <div class="form-group">
           <label class="form-label">Preço Unitário (R$)</label>
-          <input class="form-input" type="number" step="0.01" id="item-preco" value="" placeholder="0,00" oninput="calcItemSubtotal()"/>
+          <input class="form-input" type="number" step="0.01" id="item-preco" value="" placeholder="0,00" oninput="calcItemSubtotal();atualizarOpcaoPrecoEspecialVenda()"/>
+          <label id="opcao-preco-especial-venda" style="display:none;align-items:flex-start;gap:8px;margin-top:7px;padding:8px;border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:11px;color:var(--text2);"><input type="checkbox" id="item-salvar-preco-especial" style="margin-top:2px;"/><span>Salvar este valor como pre&ccedil;o especial para o cliente</span></label>
         </div>
         <div class="form-group">
           <label class="form-label">Desconto por Unidade (R$)</label>
@@ -841,6 +979,7 @@ async function renderFormVenda(c) {
   calcTotais();
   decorarProdutosVenda();
   filtrarProdutosPedido('venda');
+  ativarSeletorPesquisavel('f-id_cliente','Digite parte do nome do cliente...');
 }
 
 function produtoVendaComposicao(p) {
@@ -888,15 +1027,21 @@ function preencherPreco() {
   const sel = document.getElementById('item-produto');
   const opt = sel.options[sel.selectedIndex];
   const preco = opt?.dataset?.preco || '';
-  document.getElementById('item-preco').value = preco ? Number(preco).toFixed(2) : '';
+  const campoPreco=document.getElementById('item-preco');
+  campoPreco.value = preco ? Number(preco).toFixed(2) : '';
+  campoPreco.dataset.idPrecoEspecial=''; campoPreco.dataset.precoEspecial='';
   atualizarInfoProdutoVenda();
   calcItemSubtotal();
+  atualizarOpcaoPrecoEspecialVenda();
 
   // Verificar preço especial para o cliente
   const idCliente = document.getElementById('f-id_cliente')?.value;
   const idProduto = sel.value;
   if(idCliente && idProduto) {
-    apiGet(`produtos_precos_especiais?select=preco_especial&id_cliente=eq.${idCliente}&id_produto=eq.${idProduto}`).then(r => {
+    apiGet(`produtos_precos_especiais?select=id_preco_especial,preco_especial&id_cliente=eq.${idCliente}&id_produto=eq.${idProduto}`).then(r => {
+      const campo=document.getElementById('item-preco');
+      if(campo){campo.dataset.idPrecoEspecial=r?.[0]?.id_preco_especial||'';campo.dataset.precoEspecial=r?.[0]?.preco_especial??'';}
+      setTimeout(atualizarOpcaoPrecoEspecialVenda,0);
       if(Array.isArray(r) && r.length > 0) {
         document.getElementById('item-preco').value = Number(r[0].preco_especial).toFixed(2);
         calcItemSubtotal();
@@ -904,6 +1049,25 @@ function preencherPreco() {
       }
     });
   }
+}
+
+function atualizarOpcaoPrecoEspecialVenda(){
+  const painel=document.getElementById('opcao-preco-especial-venda'), check=document.getElementById('item-salvar-preco-especial'), campo=document.getElementById('item-preco');
+  const produto=cacheProdutos.find(p=>String(p.id_produto)===String(document.getElementById('item-produto')?.value));
+  const preco=numeroVenda(campo?.value), cadastro=Number(produto?.preco_venda||0), especial=Number(campo?.dataset.precoEspecial||0);
+  const diferente=!!produto&&preco>0&&Math.abs(preco-cadastro)>0.005;
+  const jaCadastrado=!!campo?.dataset.idPrecoEspecial&&Math.abs(preco-especial)<=0.005;
+  if(painel)painel.style.display=diferente&&!jaCadastrado?'flex':'none';
+  if(check&&(!diferente||jaCadastrado))check.checked=false;
+}
+
+async function salvarPrecoEspecialDoItem(idCliente,idProduto,preco){
+  const campo=document.getElementById('item-preco'), id=campo?.dataset.idPrecoEspecial;
+  const data={id_cliente:Number(idCliente),id_produto:Number(idProduto),preco_especial:Number(preco),observacoes:'Cadastrado durante o pedido de venda'};
+  const res=id?await apiPatch(`produtos_precos_especiais?id_preco_especial=eq.${id}`,data):await apiPost('produtos_precos_especiais',data);
+  if(!res.ok){toast('Nao foi possivel salvar o preco especial.','error');return false;}
+  toast(id?'Preco especial atualizado.':'Preco especial cadastrado para o cliente.','success');
+  return true;
 }
 
 async function aplicarPadraoClienteVenda(forcar=false) {
@@ -949,7 +1113,7 @@ function calcItemSubtotal() {
   if(el) el.value = 'R$ ' + Math.max(0,sub).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
-function adicionarItem() {
+async function adicionarItem() {
   if(!itensVendaEditaveis){toast('Somente vendas em aberto permitem alterar itens.','error');return;}
   const sel = document.getElementById('item-produto');
   const idProd = sel.value;
@@ -963,6 +1127,12 @@ function adicionarItem() {
   if(preco<=0){ toast('Preço deve ser maior que zero','error'); return; }
   if(desc<0){toast('O desconto do item não pode ser negativo.','error');return;}
   if(desc>preco+0.005){toast('O desconto por unidade não pode ser maior que o preço unitário.','error');return;}
+
+  if(document.getElementById('item-salvar-preco-especial')?.checked){
+    const idCliente=document.getElementById('f-id_cliente')?.value;
+    if(!idCliente){toast('Selecione o cliente antes de cadastrar o preco especial.','error');return;}
+    if(!await salvarPrecoEspecialDoItem(idCliente,idProd,preco))return;
+  }
 
   const subtotal = Math.max(0,qty*(preco-desc));
   const prodCache = cacheProdutos.find(p=>String(p.id_produto)===String(idProd));

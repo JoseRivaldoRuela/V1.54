@@ -146,6 +146,7 @@ async function renderFormConta(c) {
         <button class="btn btn-primary" id="btn-save" onclick="saveConta()">Cadastrar título</button>
         <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
       </div>`;
+    ativarSeletorPesquisavel('f-id_cliente','Digite parte do nome do cliente...');
     setTimeout(()=>document.getElementById('f-valor_original')?.focus(),0);
     return;
   }
@@ -264,6 +265,7 @@ async function renderFormConta(c) {
       ${c?.id_venda ? `<button class="btn btn-secondary" onclick="mostrarResumoVendaConta(${c.id_venda},event)">Resumo da venda</button>` : ''}
       <button class="btn btn-secondary" onclick="cancelForm()">Cancelar</button>
     </div>`;
+  ativarSeletorPesquisavel('f-id_cliente','Digite parte do nome do cliente...');
 }
 
 async function excluirContaReceber() {
@@ -457,6 +459,39 @@ function solicitarContaFinancasBaixa(contas) {
     });
 }
 
+async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null){
+  let integracao={ativa:false,contas:[],categoria:null};
+  try{integracao=await carregarIntegracaoFinancas('entrada');}
+  catch(e){return {ok:false,message:'Nao foi possivel consultar o Financas: '+(e.message||e)};}
+  const lista=integracao.ativa&&Array.isArray(integracao.contas)?integracao.contas:[];
+  const dataBase=dataInicial?new Date(dataInicial):new Date();
+  const dataLocal=new Date(dataBase.getTime()-dataBase.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  return new Promise(resolve=>{
+    document.getElementById('confirmar-baixa-rapida-receber')?.remove();
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';modal.id='confirmar-baixa-rapida-receber';modal.style.display='flex';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar recebimento</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;"></div><label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Receber.</small></span></label><div class="form-group" data-grupo-conta><label class="form-label">Onde este recebimento entrou? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(lista,conta?.id_conta_financas)}</select></div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data do recebimento *</label><input class="form-input" type="datetime-local" data-data-recebimento value="${dataLocal}"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button><button type="button" class="btn btn-primary" data-confirmar>Confirmar recebimento</button></div></div>`;
+    modal.querySelector('[data-mensagem]').textContent=mensagem;
+    const campoAtualizar=modal.querySelector('[data-atualizar-financas]');
+    const grupoConta=modal.querySelector('[data-grupo-conta]');
+    const atualizarVisibilidade=()=>{grupoConta.style.display=campoAtualizar.checked&&integracao.ativa?'block':'none';};
+    campoAtualizar.addEventListener('change',atualizarVisibilidade);atualizarVisibilidade();
+    const concluir=valor=>{modal.remove();resolve(valor);};
+    modal.querySelector('[data-cancelar]').onclick=()=>concluir({ok:false,cancelada:true});
+    modal.querySelector('[data-confirmar]').onclick=()=>{
+      const atualizarFinancas=campoAtualizar.checked;
+      const contaId=Number(modal.querySelector('[data-conta]')?.value||0);
+      if(atualizarFinancas&&integracao.ativa&&!contaId){toast('Selecione a conta do Financas.','error');return;}
+      const valorData=modal.querySelector('[data-data-recebimento]')?.value;
+      const dataRecebimento=valorData?new Date(valorData):null;
+      if(!dataRecebimento||Number.isNaN(dataRecebimento.getTime())){toast('Informe uma data de recebimento valida.','error');return;}
+      concluir({ok:true,atualizarFinancas,contaId:atualizarFinancas&&integracao.ativa?contaId:null,dataRecebimento:dataRecebimento.toISOString()});
+    };
+    modal.addEventListener('click',e=>{if(e.target===modal)concluir({ok:false,cancelada:true});});
+    document.body.appendChild(modal);
+  });
+}
+
 async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atualizarFinancas=true) {
   if(atualizarFinancas===false)return {ok:true,ativa:false,ignorada:true};
   if(typeof carregarIntegracaoFinancas!=='function')return {ok:true,ativa:false};
@@ -586,13 +621,14 @@ async function marcarContaReceberPagaRapido(idConta, event) {
   const saldo = contasValorAberto(conta);
   if(!conta || saldo <= 0.005) { toast('Esta conta já está quitada.','info'); return; }
   const cliente = conta.clientes?.nome_fantasia || conta.clientes?.razao_social || `Conta #${idConta}`;
-  const confirmacao=await confirmarBaixaComOpcaoFinancas(`Marcar como recebido ${contasFmtMoeda(saldo)} de ${cliente}?`);
-  if(!confirmacao)return;
+  const confirmacao=await confirmarBaixaRapidaContaReceber(conta,`Marcar como recebido ${contasFmtMoeda(saldo)} de ${cliente}?`);
+  if(!confirmacao.ok){if(!confirmacao.cancelada)toast(confirmacao.message,'error');return;}
   if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
   const baixa = await aplicarBaixaContaReceber(conta, saldo, {
-    data_baixa: new Date().toISOString(),
+    data_baixa: confirmacao.dataRecebimento,
     meio_pagamento: conta.meio_pagamento || null,
     observacoes: 'Pagamento integral pela lista lateral',
+    id_conta_financas:confirmacao.contaId,
     atualizar_financas:confirmacao.atualizarFinancas
   });
   if(!baixa.ok) {
@@ -1617,9 +1653,11 @@ async function renderDashboardContas() {
   const cardStyle = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px;text-align:left;cursor:pointer;';
 
   const dias = parseInt(contasDashPeriodo);
+  const fimMesSelecionado=contasDateLocal(range.fim);
+  const dataFimGrafico=contasDashMesOffset===0?hoje:new Date(fimMesSelecionado.getTime()-864e5);
   const labels = [], valoresRecebidos = [], valoresReceber = [];
   for(let i=dias-1; i>=0; i--) {
-    const d = new Date(hoje.getTime()-i*864e5);
+    const d = new Date(dataFimGrafico.getTime()-i*864e5);
     const ds = contasFmtDataLocal(d);
     labels.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
     valoresRecebidos.push(contasSoma(recebidas.filter(c=>contasDateOnly(c.data_recebimento)===ds), true));
