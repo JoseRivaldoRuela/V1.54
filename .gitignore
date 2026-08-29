@@ -4,3 +4,4 @@
 painel-vercel-v*/
 node_modules/
 .vercel/
+.env*

@@ -2,13 +2,16 @@
 function toggleMenu(name) {
   document.querySelectorAll('.dropdown').forEach(d => { if(d.id!=='dd-'+name) d.classList.remove('open'); });
   document.querySelectorAll('.menu-btn').forEach(b => { if(b.id!=='mbtn-'+name) b.classList.remove('open'); });
-  document.getElementById('dd-'+name)?.classList.toggle('open');
-  document.getElementById('mbtn-'+name)?.classList.toggle('open');
+  const dropdown=document.getElementById('dd-'+name);
+  const aberto=dropdown?.classList.toggle('open')||false;
+  document.getElementById('mbtn-'+name)?.classList.toggle('open',aberto);
+  document.getElementById('menu-bar')?.classList.toggle('menu-open',aberto);
 }
 function closeMenus() {
   document.querySelectorAll('.dropdown').forEach(d=>d.classList.remove('open'));
   document.querySelectorAll('.menu-btn').forEach(b=>b.classList.remove('open'));
   document.querySelectorAll('.dropdown-submenu').forEach(s=>s.classList.remove('open'));
+  document.getElementById('menu-bar')?.classList.remove('menu-open');
 }
 function toggleSubmenu(e, id) {
   e.stopPropagation();
@@ -163,10 +166,25 @@ async function loadItems() {
       return dA > dB ? -1 : dA < dB ? 1 : 0;
     });
   }
+  const nomesCadastro={
+    clientes:x=>nomeClienteCadastro(x),
+    fornecedores:x=>nomeFornecedorCadastro(x),
+    tipo_mercadoria:x=>x.descricao,
+    produtos_tab:x=>x.nome_mercadoria,
+    kardex:x=>x.nome_mercadoria,
+    usuarios:x=>x.nome||x.username,
+    empresas:x=>x.nome||x.codigo,
+    precos_especiais:x=>`${nomeClienteCadastro(x.clientes)} ${x.produtos?.nome_mercadoria||''}`
+  };
+  if(nomesCadastro[currentTab])data.splice(0,data.length,...ordenarCadastro(data,nomesCadastro[currentTab]));
   items=data;
-  filtered=currentTab==='contas_receber' ? filtrarLateralContasReceber(items) : (currentTab==='contas_pagar' ? ordenarLateralContasPagar(items) : [...items]);
+  filtered=currentTab==='contas_receber'
+    ? filtrarLateralContasReceber(items)
+    : (currentTab==='contas_pagar' ? ordenarLateralContasPagar(items) : (currentTab==='compras' ? filtrarLateralCompras(items) : [...items]));
   renderList();
-  document.getElementById('sidebar-footer').textContent=`${items.length} ${cfg.plural.toLowerCase()}`;
+  document.getElementById('sidebar-footer').textContent=currentTab==='compras'
+    ? `${filtered.length} compras no período`
+    : `${items.length} ${cfg.plural.toLowerCase()}`;
   const badge=document.getElementById('badge-'+currentTab);
   if(badge) badge.textContent=items.length;
 }
@@ -360,9 +378,16 @@ function somaContasAbertasCliente(lista, idCliente) {
 
 function filtrarLateralContasReceber(lista, termo='') {
   const fields = tabConfig.contas_receber.searchFields;
-  const base = contasReceberClienteFiltro
+  const periodo = periodoResumoContasReceber();
+  const noPeriodo = c => {
+    if(contaReceberAberta(c)) return true;
+    const chave = String(c.data_vencimento||'').slice(0,10);
+    return chave>=periodo.inicio && chave<periodo.fim;
+  };
+  const baseSemPeriodo = contasReceberClienteFiltro
     ? lista.filter(c => contaReceberAberta(c) && Number(c.id_cliente) === Number(contasReceberClienteFiltro))
     : (contasReceberMostrarTodos ? [...lista] : lista.filter(contaReceberAberta));
+  const base = baseSemPeriodo.filter(noPeriodo);
   return termo ? base.filter(c=>itemContemBusca(c, termo, fields)) : base;
 }
 
@@ -372,7 +397,13 @@ function contaPagarEmAberto(c) {
 }
 
 function ordenarLateralContasPagar(lista) {
-  return [...(lista || [])].sort((a,b) => {
+  const periodo = periodoResumoContasPagar();
+  const noPeriodo = c => {
+    if(contaPagarEmAberto(c)) return true;
+    const chave = String(c.data_vencimento||'').slice(0,10);
+    return chave>=periodo.inicio && chave<periodo.fim;
+  };
+  return [...(lista || [])].filter(noPeriodo).sort((a,b) => {
     const abertoA = contaPagarEmAberto(a);
     const abertoB = contaPagarEmAberto(b);
     if(abertoA !== abertoB) return abertoA ? -1 : 1;
@@ -380,6 +411,25 @@ function ordenarLateralContasPagar(lista) {
     const vencB = String(b.data_vencimento || '');
     if(vencA !== vencB) return vencB.localeCompare(vencA);
     return Number(b.id_conta_pagar || 0) - Number(a.id_conta_pagar || 0);
+  });
+}
+
+function filtrarLateralCompras(lista, termo='') {
+  const periodo = periodoResumoCompras();
+  const fields = tabConfig.compras.searchFields;
+  const base = (lista||[]).filter(c=>{
+    const data=String(c.data_compra||'').slice(0,10);
+    return data>=periodo.inicio && data<periodo.fim;
+  });
+  const resultado=termo ? base.filter(c=>itemContemBusca(c,termo,fields)) : base;
+  return resultado.sort((a,b)=>{
+    const pendenteA=String(a.status_compra||'PENDENTE').toUpperCase()==='PENDENTE';
+    const pendenteB=String(b.status_compra||'PENDENTE').toUpperCase()==='PENDENTE';
+    if(pendenteA!==pendenteB)return pendenteA?-1:1;
+    const dataA=String(a.data_compra||'');
+    const dataB=String(b.data_compra||'');
+    if(dataA!==dataB)return dataB.localeCompare(dataA);
+    return Number(b.id_compra||0)-Number(a.id_compra||0);
   });
 }
 
@@ -393,6 +443,7 @@ function filterItems() {
   if(currentTab==='empresas') { filtrarEmpresasAdmin(q); return; }
   const fields=tabConfig[currentTab].searchFields;
   if(currentTab === 'contas_receber') filtered = filtrarLateralContasReceber(items, q);
+  else if(currentTab === 'compras') filtered = filtrarLateralCompras(items,q);
   else {
     const resultado = !q ? [...items] : items.filter(c=>itemContemBusca(c, q, fields));
     filtered = currentTab === 'contas_pagar' ? ordenarLateralContasPagar(resultado) : resultado;
@@ -415,49 +466,177 @@ function dataPuraBR(value) {
   return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('pt-BR');
 }
 
+function periodoResumoContasReceber() {
+  const hoje = new Date();
+  const anual = contasReceberResumoModo === 'ano';
+  const inicio = anual
+    ? new Date(hoje.getFullYear() + contasReceberResumoOffset, 0, 1)
+    : new Date(hoje.getFullYear(), hoje.getMonth() + contasReceberResumoOffset, 1);
+  const fim = anual
+    ? new Date(inicio.getFullYear() + 1, 0, 1)
+    : new Date(inicio.getFullYear(), inicio.getMonth() + 1, 1);
+  const chave = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return {
+    inicio: chave(inicio),
+    fim: chave(fim),
+    label: anual ? String(inicio.getFullYear()) : inicio.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+  };
+}
+
+function mudarPeriodoResumoContasReceber(delta) {
+  contasReceberResumoOffset = Math.min(0, contasReceberResumoOffset + Number(delta||0));
+  filterItems();
+}
+
+function mudarModoResumoContasReceber(modo) {
+  contasReceberResumoModo = modo === 'ano' ? 'ano' : 'mes';
+  contasReceberResumoOffset = 0;
+  filterItems();
+}
+
+function periodoResumoContasPagar() {
+  const hoje = new Date();
+  const anual = contasPagarResumoModo === 'ano';
+  const inicio = anual
+    ? new Date(hoje.getFullYear() + contasPagarResumoOffset, 0, 1)
+    : new Date(hoje.getFullYear(), hoje.getMonth() + contasPagarResumoOffset, 1);
+  const fim = anual
+    ? new Date(inicio.getFullYear() + 1, 0, 1)
+    : new Date(inicio.getFullYear(), inicio.getMonth() + 1, 1);
+  const chave = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return {
+    inicio: chave(inicio),
+    fim: chave(fim),
+    label: anual ? String(inicio.getFullYear()) : inicio.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+  };
+}
+
+function mudarPeriodoResumoContasPagar(delta) {
+  contasPagarResumoOffset = Math.min(0, contasPagarResumoOffset + Number(delta||0));
+  if(contasPagarFiltroAtivo?.filtro) listarContasPagarDash(contasPagarFiltroAtivo.filtro);
+  else filterItems();
+}
+
+function mudarModoResumoContasPagar(modo) {
+  contasPagarResumoModo = modo === 'ano' ? 'ano' : 'mes';
+  contasPagarResumoOffset = 0;
+  if(contasPagarFiltroAtivo?.filtro) listarContasPagarDash(contasPagarFiltroAtivo.filtro);
+  else filterItems();
+}
+
+function periodoResumoCompras() {
+  const hoje=new Date();
+  const anual=comprasResumoModo==='ano';
+  const inicio=anual
+    ? new Date(hoje.getFullYear()+comprasResumoOffset,0,1)
+    : new Date(hoje.getFullYear(),hoje.getMonth()+comprasResumoOffset,1);
+  const fim=anual
+    ? new Date(inicio.getFullYear()+1,0,1)
+    : new Date(inicio.getFullYear(),inicio.getMonth()+1,1);
+  const chave=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return {inicio:chave(inicio),fim:chave(fim),label:anual?String(inicio.getFullYear()):inicio.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})};
+}
+
+function mudarPeriodoResumoCompras(delta) {
+  comprasResumoOffset=Math.min(0,comprasResumoOffset+Number(delta||0));
+  filterItems();
+}
+
+function mudarModoResumoCompras(modo) {
+  comprasResumoModo=modo==='ano'?'ano':'mes';
+  comprasResumoOffset=0;
+  filterItems();
+}
+
+function resumoListaCompras() {
+  const periodo=periodoResumoCompras();
+  const total=filtered.reduce((s,c)=>s+Number(c.valor_total||0),0);
+  return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
+    <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;margin-bottom:7px;">Compras · ${periodo.label}</div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px;margin-bottom:7px;">
+      <button type="button" onclick="mudarPeriodoResumoCompras(-1)" class="dash-period-btn" title="Período anterior">‹</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+        <button type="button" onclick="mudarModoResumoCompras('mes')" class="dash-period-btn ${comprasResumoModo==='mes'?'active':''}">Mês</button>
+        <button type="button" onclick="mudarModoResumoCompras('ano')" class="dash-period-btn ${comprasResumoModo==='ano'?'active':''}">Ano</button>
+      </div>
+      <button type="button" onclick="mudarPeriodoResumoCompras(1)" class="dash-period-btn" title="Próximo período" ${comprasResumoOffset>=0?'disabled style="opacity:.4;cursor:not-allowed;"':''}>›</button>
+    </div>
+    <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Total</span><strong style="color:var(--accent);font-family:var(--mono);">${fmtResumoFinanceiro(total)}</strong></div>
+    <div style="font-size:10px;color:var(--text3);margin-top:5px;">${filtered.length} compra${filtered.length!==1?'s':''} na lateral</div>
+  </div>`;
+}
+
 function resumoListaFinanceira() {
   if(currentTab === 'contas_receber') {
-    const recebido = items.reduce((s,c)=>s + Number(c.status_recebimento === 'RECEBIDO' ? (c.valor_recebido || c.valor_original || 0) : (c.valor_recebido || 0)), 0);
-    const aReceber = items.reduce((s,c)=>{
+    const periodo = periodoResumoContasReceber();
+    const base = contasReceberClienteFiltro
+      ? items.filter(c=>Number(c.id_cliente)===Number(contasReceberClienteFiltro))
+      : items;
+    const noPeriodo = valor => { const d=String(valor||'').slice(0,10); return d>=periodo.inicio && d<periodo.fim; };
+    const contasRecebidasPeriodo = base.filter(c=>contasValorRecebido(c)>0.005 && noPeriodo(c.data_recebimento));
+    const contasAReceberPeriodo = base.filter(contaReceberAberta);
+    const recebido = contasRecebidasPeriodo.reduce((s,c)=>s+contasValorRecebido(c),0);
+    const aReceber = contasAReceberPeriodo.reduce((s,c)=>{
       if(c.status_recebimento === 'RECEBIDO' || c.status_recebimento === 'CANCELADO') return s;
       return s + Math.max(0, Number(c.valor_original || 0) - Number(c.valor_recebido || 0));
     }, 0);
-    const abertas = items.filter(contaReceberAberta).length;
-    const total = items.length;
+    const abertas = filtered.filter(contaReceberAberta).length;
+    const total = filtered.length;
     const clienteResumo = contasReceberClienteFiltro ? (() => {
       const contasCliente = items.filter(c => contaReceberAberta(c) && Number(c.id_cliente) === Number(contasReceberClienteFiltro));
       const nomeCliente = contasCliente[0]?.clientes?.nome_fantasia || contasCliente[0]?.clientes?.razao_social || `Cliente #${contasReceberClienteFiltro}`;
-      const totalCliente = contasCliente.reduce((s,c) => s + contasValorAberto(c), 0);
+      const totalCliente = aReceber;
       return { nomeCliente, totalCliente };
     })() : null;
     return `
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasReceberClienteFiltro ? 'Visão do cliente' : 'Resumo geral'}</div>
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasReceberClienteFiltro ? 'Visão do cliente' : 'Resumo'} · ${periodo.label}</div>
           <button onclick="${contasReceberClienteFiltro ? 'limparFiltroClienteContasReceber()' : 'toggleLateralContasReceber()'}" style="background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:10px;padding:4px 8px;cursor:pointer;">${contasReceberClienteFiltro ? '↺ Mostrar todos' : (contasReceberMostrarTodos?'Ver abertos':'Ver todos')}</button>
+        </div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px;margin-bottom:7px;">
+          <button type="button" onclick="mudarPeriodoResumoContasReceber(-1)" class="dash-period-btn" title="Período anterior">‹</button>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+            <button type="button" onclick="mudarModoResumoContasReceber('mes')" class="dash-period-btn ${contasReceberResumoModo==='mes'?'active':''}">Mês</button>
+            <button type="button" onclick="mudarModoResumoContasReceber('ano')" class="dash-period-btn ${contasReceberResumoModo==='ano'?'active':''}">Ano</button>
+          </div>
+          <button type="button" onclick="mudarPeriodoResumoContasReceber(1)" class="dash-period-btn" title="Próximo período" ${contasReceberResumoOffset>=0?'disabled style="opacity:.4;cursor:not-allowed;"':''}>›</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr;gap:6px;">
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Recebido</span><strong style="color:var(--accent2);font-family:var(--mono);">${fmtResumoFinanceiro(recebido)}</strong></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A receber</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aReceber)}</strong></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A receber (total)</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aReceber)}</strong></div>
           <div style="font-size:10px;color:var(--text3);">${contasReceberClienteFiltro ? `${clienteResumo.nomeCliente} • ${fmtResumoFinanceiro(clienteResumo.totalCliente)} em aberto` : (contasReceberMostrarTodos ? `${total} conta${total!==1?'s':''} na lateral` : `${abertas} em aberto na lateral`)}</div>
         </div>
       </div>`;
   }
   if(currentTab === 'contas_pagar') {
-    const pago = filtered.reduce((s,c)=>s + Number(c.status_pagamento === 'PAGO' ? (c.valor_pago || c.valor_original || 0) : (c.valor_pago || 0)), 0);
-    const aPagar = filtered.reduce((s,c)=>{
+    const periodo = periodoResumoContasPagar();
+    const base = contasPagarFiltroAtivo ? filtered : items;
+    const noPeriodo = valor => { const d=String(valor||'').slice(0,10); return d>=periodo.inicio && d<periodo.fim; };
+    const contasPagasPeriodo = base.filter(c=>Number(c.valor_pago||0)>0.005 && noPeriodo(c.data_pagamento));
+    const contasAPagarPeriodo = base.filter(contaPagarEmAberto);
+    const pago = contasPagasPeriodo.reduce((s,c)=>s+Number(c.valor_pago||c.valor_original||0),0);
+    const aPagar = contasAPagarPeriodo.reduce((s,c)=>{
       if(c.status_pagamento === 'PAGO' || c.status_pagamento === 'CANCELADO') return s;
       return s + Math.max(0, Number(c.valor_original || 0) - Number(c.valor_pago || 0));
     }, 0);
     return `
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:0 0 8px;padding:10px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasPagarFiltroAtivo?.label || 'Resumo geral'}</div>
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">${contasPagarFiltroAtivo?.label || 'Resumo'} · ${periodo.label}</div>
           ${contasPagarFiltroAtivo ? '<button onclick="limparFiltroContasPagar()" style="background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:10px;padding:4px 8px;cursor:pointer;">↺ Mostrar todos</button>' : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px;margin-bottom:7px;">
+          <button type="button" onclick="mudarPeriodoResumoContasPagar(-1)" class="dash-period-btn" title="Período anterior">‹</button>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+            <button type="button" onclick="mudarModoResumoContasPagar('mes')" class="dash-period-btn ${contasPagarResumoModo==='mes'?'active':''}">Mês</button>
+            <button type="button" onclick="mudarModoResumoContasPagar('ano')" class="dash-period-btn ${contasPagarResumoModo==='ano'?'active':''}">Ano</button>
+          </div>
+          <button type="button" onclick="mudarPeriodoResumoContasPagar(1)" class="dash-period-btn" title="Próximo período" ${contasPagarResumoOffset>=0?'disabled style="opacity:.4;cursor:not-allowed;"':''}>›</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr;gap:6px;">
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">Pago</span><strong style="color:var(--accent2);font-family:var(--mono);">${fmtResumoFinanceiro(pago)}</strong></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A pagar</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aPagar)}</strong></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><span style="color:var(--text2);">A pagar (total)</span><strong style="color:var(--warn);font-family:var(--mono);">${fmtResumoFinanceiro(aPagar)}</strong></div>
         </div>
       </div>`;
   }
@@ -475,7 +654,7 @@ async function renderList() {
     await renderListVendas(el);
     return;
   }
-  const resumoFinanceiro = resumoListaFinanceira();
+  const resumoFinanceiro = currentTab==='compras' ? resumoListaCompras() : resumoListaFinanceira();
   if(!filtered.length){
     let emptyHtml = resumoFinanceiro + '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Nenhum encontrado</div>';
     if(currentTab==='contas_receber' && contasReceberClienteFiltro) {
@@ -485,6 +664,7 @@ async function renderList() {
       emptyHtml += `<div style="padding:8px 0 0;"><button type="button" onclick="limparFiltroContasPagar()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);padding:8px 10px;font-size:11px;cursor:pointer;">↺ Voltar e mostrar todos</button></div>`;
     }
     el.innerHTML = emptyHtml;
+    if(currentTab==='compras') document.getElementById('sidebar-footer').textContent='0 compras no período';
     return;
   }
   let listaHtml = filtered.map(c=>{
@@ -507,6 +687,8 @@ async function renderList() {
       pills = `<span class="pill ${sc}">${slabel}</span>`;
       const totalCliente = somaContasAbertasCliente(items, c.id_cliente);
       const btnCliente = saldo > 0.005 ? `<button type="button" onclick="event.stopPropagation(); mostrarContasCliente(${c.id_cliente});" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text2);padding:4px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">👁 ${totalCliente > 0.005 ? fmtResumoFinanceiro(totalCliente) : 'Ver cliente'}</button>` : '';
+      const btnReceber = saldo > 0.005 ? `<button type="button" onclick="marcarContaReceberPagaRapido(${c.id_conta},event)" style="background:rgba(0,229,160,.12);border:1px solid rgba(0,229,160,.35);border-radius:6px;color:var(--accent);padding:4px 7px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">✓ Pago</button>` : '';
+      const btnResumoVenda = c.id_venda ? `<button type="button" onclick="mostrarResumoVendaConta(${c.id_venda},event)" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--accent2);padding:4px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">Resumo venda</button>` : '';
       return `<div class="item-card ${currentId===c[cfg.id]?'active':''}" onclick="openItem(${c[cfg.id]})">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
           <div style="min-width:0;flex:1;">
@@ -514,7 +696,7 @@ async function renderList() {
             ${valorDestaque}
             <div class="item-sub">${pills}<span>${sub}</span></div>
           </div>
-          ${btnCliente}
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${btnReceber}${btnResumoVenda}${btnCliente}</div>
         </div>
       </div>`;
     } else if(currentTab==='contas_pagar'){
@@ -537,6 +719,20 @@ async function renderList() {
       const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
+      const btnPagar = saldoPagar > 0.005 && c.status_pagamento!=='CANCELADO'
+        ? `<button type="button" onclick="marcarContaPagarPagaRapido(${c.id_conta_pagar},event)" style="background:rgba(0,229,160,.12);border:1px solid rgba(0,229,160,.35);border-radius:6px;color:var(--accent);padding:4px 7px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">✓ Pago</button>`
+        : '';
+      const btnResumoCompra = c.id_compra ? `<button type="button" onclick="mostrarResumoCompraConta(${c.id_compra},event)" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--accent2);padding:4px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">Resumo compra</button>` : '';
+      return `<div class="item-card ${currentId===c[cfg.id]?'active':''}" onclick="openItem(${c[cfg.id]})">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+          <div style="min-width:0;flex:1;">
+            <div class="item-name">${nome}</div>
+            ${valorDestaque}
+            <div class="item-sub">${pills}<span>${sub}</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${btnPagar}${btnResumoCompra}</div>
+        </div>
+      </div>`;
     } else if(currentTab==='vendas'){
       // Tratado abaixo no bloco especial
     } else if(currentTab==='compras'){
@@ -584,6 +780,7 @@ async function renderList() {
     </div>`;
   }
   el.innerHTML = resumoFinanceiro + listaHtml;
+  if(currentTab==='compras') document.getElementById('sidebar-footer').textContent=`${filtered.length} compras no período`;
 }
 
 function openItem(id) {
@@ -658,6 +855,14 @@ async function cancelForm() {
     const cfg=tabConfig[currentTab];
     document.getElementById('content-body').innerHTML=`<div class="empty-state"><div class="empty-icon">📋</div><p>Selecione um ${cfg.label.toLowerCase()} ou crie um novo</p></div>`;
   }
+}
+
+async function finalizarCadastroNovo() {
+  formularioAlterado=false;
+  currentId=null;
+  isNew=false;
+  await loadItems();
+  await cancelForm();
 }
 
 // =====================
@@ -807,3 +1012,20 @@ async function init(){
 
 
 init();
+function ativarSeletorPesquisavel(selectId, placeholder='Digite para buscar...') {
+  const select=document.getElementById(selectId);
+  if(!select||select.dataset.pesquisavel==='1')return;
+  select.dataset.pesquisavel='1'; select.style.display='none';
+  let opcoes=[...select.options].filter(o=>o.value).map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}));
+  const atual=opcoes.find(o=>o.value===select.value), wrap=document.createElement('div'), input=document.createElement('input'), lista=document.createElement('div');
+  wrap.className='seletor-pesquisavel'; wrap.style.cssText='position:relative;flex:1;min-width:0;'; input.type='text'; input.className='form-input'; input.autocomplete='off'; input.placeholder=placeholder; input.value=atual?.label||''; input.disabled=select.disabled;
+  lista.style.cssText='display:none;position:absolute;z-index:1000;left:0;right:0;top:calc(100% + 3px);max-height:240px;overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.25);';
+  const normalizar=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(), fechar=()=>lista.style.display='none';
+  const escolher=o=>{select.value=o.value;input.value=o.label;fechar();select.dispatchEvent(new Event('change',{bubbles:true}));};
+  const render=()=>{const termo=normalizar(input.value.trim()), encontrados=opcoes.filter(o=>!o.disabled&&(!termo||normalizar(o.label).includes(termo))).slice(0,80);lista.replaceChildren();if(!encontrados.length){const vazio=document.createElement('div');vazio.textContent='Nenhum resultado';vazio.style.cssText='padding:10px;color:var(--text3);font-size:12px;';lista.appendChild(vazio);}encontrados.forEach(o=>{const item=document.createElement('button');item.type='button';item.textContent=o.label;item.style.cssText='display:block;width:100%;padding:9px 11px;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--border);color:var(--text);cursor:pointer;';item.onmousedown=e=>{e.preventDefault();escolher(o);};lista.appendChild(item);});lista.style.display='block';};
+  input.addEventListener('focus',render); input.addEventListener('input',()=>{select.value='';render();});
+  input.addEventListener('keydown',e=>{if(e.key==='Escape')fechar();if(e.key==='Enter'){e.preventDefault();const primeiro=lista.querySelector('button');if(primeiro)primeiro.dispatchEvent(new MouseEvent('mousedown'));}});
+  input.addEventListener('blur',()=>setTimeout(()=>{if(!select.value)input.value='';fechar();},150));
+  select.addEventListener('change',()=>{opcoes=[...select.options].filter(o=>o.value).map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}));const escolhida=opcoes.find(o=>o.value===select.value);input.value=escolhida?.label||'';});
+  select.parentNode.insertBefore(wrap,select); wrap.append(input,lista,select);
+}

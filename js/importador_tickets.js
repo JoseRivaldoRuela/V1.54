@@ -7,7 +7,7 @@ let importadorTicketsState = {
 function renderImportadorTickets() {
   const body = document.getElementById('content-body');
   body.innerHTML = `
-    <div style="max-width:1180px;margin:0 auto;padding:18px;">
+    <div style="width:100%;max-width:1180px;margin:0 auto;padding:18px;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
         <div>
           <h2 style="margin:0 0 6px;color:var(--text);font-size:22px;">Importador de Tickets</h2>
@@ -29,7 +29,7 @@ function renderImportadorTickets() {
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;">
+      <div class="ticket-summary-grid">
         ${cardResumoImportador('Arquivos lidos', importadorTicketsState.tickets.length)}
         ${cardResumoImportador('Reconhecidos', importadorTicketsState.tickets.filter(t=>t.ok).length)}
         ${cardResumoImportador('Pendentes', importadorTicketsState.tickets.filter(t=>t.ok && !t.recebido).length)}
@@ -40,7 +40,7 @@ function renderImportadorTickets() {
         Nenhum arquivo selecionado.
       </div>
 
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+      <div class="responsive-table-wrap" style="border:1px solid var(--border);border-radius:8px;background:var(--surface);">
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
           <thead>
             <tr style="background:var(--surface2);color:var(--text2);">
@@ -341,6 +341,8 @@ async function importarTicketsSelecionados() {
   try {
     addLog('Carregando cadastros...');
     const ctx = await carregarContextoImportador();
+    ctx.financeiro=await prepararIntegracaoBaixaContaReceber(null);
+    if(!ctx.financeiro.ok)throw new Error(ctx.financeiro.message||'Selecione a conta do Finanças para importar os tickets.');
     for(const ticket of tickets) {
       await importarTicketUnico(ticket, ctx, addLog);
     }
@@ -382,7 +384,7 @@ async function importarTicketUnico(ticket, ctx, addLog) {
   if(Array.isArray(existente) && existente.length) {
     const venda = existente[0];
     await atualizarVendaImportada(venda.id_venda, ticket, meioPagamento);
-    await atualizarContaReceberImportada(venda.id_venda, venda.codigo_venda, ticket, importRef, meioPagamento);
+    await atualizarContaReceberImportada(venda.id_venda, venda.codigo_venda, ticket, importRef, meioPagamento,ctx.financeiro);
     addLog(`${ticket.arquivo}: ja existia como ${venda.codigo_venda}; venda e financeiro atualizados.`);
     return;
   }
@@ -438,6 +440,8 @@ async function importarTicketUnico(ticket, ctx, addLog) {
     observacoes: `Pedido ${codigo} - Parcela 1/1 - importado de ${importRef}`
   });
   if(!contaRes.ok) throw new Error(contaRes.data?.message || `Erro ao criar conta a receber ${codigo}`);
+  const sincronizacao=await vincularTitulosReceberFinancas(Array.isArray(contaRes.data)?contaRes.data:[],ctx.financeiro,`Venda ${codigo}`);
+  if(!sincronizacao.ok)throw new Error(`Conta criada, mas o Finanças não foi atualizado: ${sincronizacao.message}`);
 
   addLog(`${ticket.arquivo}: importado como ${codigo}.`);
 }
@@ -452,7 +456,7 @@ async function atualizarVendaImportada(idVenda, ticket, meioPagamento) {
   if(!res.ok) throw new Error(res.data?.message || `Erro ao atualizar desconto da venda ${idVenda}`);
 }
 
-async function atualizarContaReceberImportada(idVenda, codigo, ticket, importRef, meioPagamento) {
+async function atualizarContaReceberImportada(idVenda, codigo, ticket, importRef, meioPagamento, financeiro) {
   const valorFinal = calcularValorFinalTicket(ticket);
   const res = await apiPatch(`contas_receber?id_venda=eq.${idVenda}`, {
     observacoes: `Pedido ${codigo || '#' + idVenda} - Parcela 1/1 - importado de ${importRef}`,
@@ -463,6 +467,8 @@ async function atualizarContaReceberImportada(idVenda, codigo, ticket, importRef
     data_recebimento: ticket.recebido ? (ticket.data_recebimento || ticket.data_venda) : null
   });
   if(!res.ok) throw new Error(res.data?.message || `Erro ao atualizar conta da venda ${codigo}`);
+  const sincronizacao=await vincularTitulosReceberFinancas(Array.isArray(res.data)?res.data:[],financeiro,`Venda ${codigo||'#'+idVenda}`);
+  if(!sincronizacao.ok)throw new Error(`Conta atualizada, mas o Finanças não foi atualizado: ${sincronizacao.message}`);
 }
 
 async function obterOuCriarClienteImportador(nome, importRef, ctx) {
@@ -608,4 +614,3 @@ function moeda(v) {
 function formatarDataCurta(iso) {
   return new Date(iso).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit' });
 }
-

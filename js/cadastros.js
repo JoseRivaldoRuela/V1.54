@@ -58,11 +58,11 @@ async function saveCadastro() {
   }
   if(isNew){
     const{ok,data:res}=await apiPost(cfg.table,data);
-    if(ok){toast(cfg.label+' cadastrado!','success');await loadItems();const n=Array.isArray(res)?res[0]:res;if(n)openItem(n[cfg.id]);}
+    if(ok){toast(cfg.label+' cadastrado!','success');await finalizarCadastroNovo();}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='+ Cadastrar';}
   } else {
     const{ok,data:res}=await apiPatch(`${cfg.table}?${cfg.id}=eq.${currentId}`,data);
-    if(ok){toast('Salvo!','success');await loadItems();openItem(currentId);}
+    if(ok){formularioAlterado=false;toast('Salvo!','success');await loadItems();openItem(currentId);}
     else{toast('Erro: '+(res?.message||'erro'),'error');btn.disabled=false;btn.textContent='✓ Salvar';}
   }
 }
@@ -309,7 +309,7 @@ async function renderDashboardFornecedores() {
 
     <div class="dash-chart-box">
       <div class="dash-chart-title"><span>Resumo do Melhor Fornecedor</span></div>
-      ${melhorFornecedor ? `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;align-items:center;">
+      ${melhorFornecedor ? `<div class="mobile-summary-grid">
         <div>
           <div style="font-size:16px;font-weight:600;color:var(--text);">${melhorFornecedor.nome}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:4px;">Ultima compra: ${melhorFornecedor.ultima?new Date(melhorFornecedor.ultima).toLocaleDateString('pt-BR'):'-'}</div>
@@ -466,7 +466,7 @@ async function renderDashboardClientes() {
 
     <div class="dash-chart-box">
       <div class="dash-chart-title"><span>Resumo do Melhor Cliente</span></div>
-      ${melhorCliente ? `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;align-items:center;">
+      ${melhorCliente ? `<div class="mobile-summary-grid">
         <div>
           <div style="font-size:16px;font-weight:600;color:var(--text);">${melhorCliente.nome}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:4px;">Ultima compra: ${melhorCliente.ultima?new Date(melhorCliente.ultima).toLocaleDateString('pt-BR'):'-'}</div>

@@ -147,7 +147,5 @@ async function saveMovimentacaoEstoque() {
 
   toast('Ajuste de estoque registrado!','success');
   await loadCaches();
-  await loadItems();
-  const mov = Array.isArray(movRes.data) ? movRes.data[0] : movRes.data;
-  if(mov?.id_movimentacao) openItem(mov.id_movimentacao);
+  await finalizarCadastroNovo();
 }
