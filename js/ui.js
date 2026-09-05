@@ -150,6 +150,7 @@ async function loadItems() {
   if(!Array.isArray(data)){ toast('Erro ao carregar: '+(data?.message||''),'error'); return; }
   if(currentTab==='contas_receber') await anexarCodigoVendaContas(data);
   if(currentTab==='contas_pagar') await anexarDadosCompraContasPagar(data);
+  if(['contas_receber','contas_pagar'].includes(currentTab)&&typeof anexarContasBaixaFinancas==='function') await anexarContasBaixaFinancas(data);
   // Ordenar: pendentes primeiro por data_entrega asc (mais antigos primeiro), entregues depois por data_entrega desc (mais atuais primeiro)
   if(currentTab==='vendas') {
     invalidarResumoContasVendas();
@@ -681,6 +682,7 @@ async function renderList() {
       nome = c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${c.id_cliente}`;
       const dataVenda = c.data_venda ? dataPuraBR(c.data_venda) : '-';
       sub = `Pedido: ${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')} (${dataVenda}) - Venc: ${dataPuraBR(c.data_vencimento)} - Título: ${fmtResumoFinanceiro(original)} - Recebido: ${fmtResumoFinanceiro(recebido)} - Em aberto: ${fmtResumoFinanceiro(saldo)}`;
+      if((saldo <= 0.005 || c.status_recebimento==='RECEBIDO')&&contaBaixaFinancas(c))sub += ` - Recebido em: ${textoSeguroFinancas(contaBaixaFinancas(c))}`;
       valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldo > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Parcela ${parcelaInfo}: ${fmtResumoFinanceiro(original)} <span style="font-weight:400;color:var(--text3);">• Total: ${fmtResumoFinanceiro(totalGeralTitulo)} • Aberto: ${fmtResumoFinanceiro(saldo)}</span></div>`;
       const sc = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'on' : atrasado ? 'vencido' : 'warn';
       const slabel = saldo <= 0.005 || c.status_recebimento==='RECEBIDO' ? 'RECEBIDO' : recebido > 0.005 ? 'PARCIAL' : atrasado ? 'VENCIDO' : 'PENDENTE';
@@ -715,6 +717,7 @@ async function renderList() {
       const dataPagamento = c.data_pagamento ? dataPuraBR(c.data_pagamento) : '-';
       const pagamentoInfo = c.status_pagamento === 'PAGO' ? ` - Pago em: ${dataPagamento}` : '';
       sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)}${pagamentoInfo} - Título: ${fmtResumoFinanceiro(valorTitulo)} - Pago: ${fmtResumoFinanceiro(valorPago)} - Em aberto: ${fmtResumoFinanceiro(saldoPagar)}`;
+      if(c.status_pagamento==='PAGO'&&contaBaixaFinancas(c))sub += ` - Pago por: ${textoSeguroFinancas(contaBaixaFinancas(c))}`;
       valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldoPagar > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Parcela ${parcelaInfo}: ${fmtResumoFinanceiro(valorTitulo)} <span style="font-weight:400;color:var(--text3);">• Total: ${fmtResumoFinanceiro(totalGeralTitulo)} • Em aberto: ${fmtResumoFinanceiro(saldoPagar)}</span></div>`;
       const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
       const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
@@ -896,9 +899,22 @@ function closeSidebar(){ document.getElementById('sidebar').classList.remove('op
 function toast(msg,type='success'){
   const el=document.createElement('div');
   el.className=`toast ${type}`;
-  el.textContent=(type==='success'?'✓ ':type==='error'?'✕ ':'ℹ ')+msg;
+  el.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:10px;max-width:min(560px,calc(100vw - 32px));';
+  const texto=document.createElement('span');
+  texto.textContent=(type==='success'?'✓ ':type==='error'?'✕ ':'ℹ ')+msg;
+  el.appendChild(texto);
+  if(type==='error'){
+    const ok=document.createElement('button');
+    ok.type='button';
+    ok.textContent='OK';
+    ok.style.cssText='margin-left:14px;padding:5px 12px;border:0;border-radius:5px;font-weight:700;cursor:pointer;flex:none;';
+    ok.onclick=()=>el.remove();
+    el.appendChild(ok);
+    el.setAttribute('role','alertdialog');
+    el.setAttribute('aria-live','assertive');
+  }
   document.getElementById('toasts').appendChild(el);
-  setTimeout(()=>el.remove(),3500);
+  if(type!=='error')setTimeout(()=>el.remove(),3500);
 }
 
 async function logout(){

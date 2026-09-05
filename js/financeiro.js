@@ -184,7 +184,7 @@ async function renderFormConta(c) {
     </div>
 
     <div class="section-label"><span>Valores</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px;">
+    <div class="account-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px;">
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;">
         <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;">Original</div>
         <div style="font-size:16px;font-weight:700;">${contasFmtMoeda(valorOriginal)}</div>
@@ -224,7 +224,7 @@ async function renderFormConta(c) {
       </div>
       <div class="form-group">
         <label class="form-label">Data de Recebimento</label>
-        <input class="form-input" type="datetime-local" id="f-data_recebimento" value="${v('data_recebimento')?v('data_recebimento').slice(0,16):''}"/>
+        <input class="form-input" type="datetime-local" id="f-data_recebimento" value="${dataHoraLocalFinancas(v('data_recebimento'))}"/>
       </div>
     </div>
 
@@ -238,6 +238,10 @@ async function renderFormConta(c) {
       <textarea class="form-textarea" id="f-observacoes" placeholder="Observações...">${v('observacoes')}</textarea>
     </div>
 
+    ${c && (c.status_recebimento==='RECEBIDO'||Number(c.valor_recebido||0)>0.005) && contaBaixaFinancas(c) ? `
+    <div class="section-label"><span>Baixa no Finanças</span></div>
+    <div class="form-group"><label class="form-label">Conta que recebeu o valor</label><div class="form-input" style="display:flex;align-items:center;background:var(--surface2);cursor:default;">${textoSeguroFinancas(contaBaixaFinancas(c))}</div></div>
+    ` : ''}
     <label style="display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" id="f-baixa-atualizar-financas" checked style="width:17px;height:17px;"><span style="font-size:12px;"><b>Atualizar o Finanças nas baixas e reativações</b><small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para alterar somente o Contas a Receber.</small></span></label>
 
     ${c && saldoAberto > 0.005 ? `
@@ -418,13 +422,13 @@ async function reativarRecebimento() {
 async function registrarBaixaContaReceber(payload) {
   try {
     const res = await apiPost('contas_receber_baixas', payload);
-    return res.ok;
+    return res.ok ? (Array.isArray(res.data) ? res.data[0] : res.data) : null;
   } catch(err) {
-    return false;
+    return null;
   }
 }
 
-function solicitarContaFinancasBaixa(contas) {
+function solicitarContaFinancasBaixa(contas,selecionada=null) {
   return new Promise(resolve => {
     const lista=Array.isArray(contas)?contas:[];
     if(!lista.length){resolve(null);return;}
@@ -438,7 +442,7 @@ function solicitarContaFinancasBaixa(contas) {
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Onde este recebimento entrou? *</label>
-          <select class="form-input form-select" id="baixa-conta-financas-modal">${opcoesContasFinancas(lista)}</select>
+          <select class="form-input form-select" id="baixa-conta-financas-modal">${opcoesContasFinancas(lista,selecionada)}</select>
         </div>
         <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">A baixa também será registrada no Finanças.</div>
       </div>
@@ -465,7 +469,7 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null)
   catch(e){return {ok:false,message:'Nao foi possivel consultar o Financas: '+(e.message||e)};}
   const lista=integracao.ativa&&Array.isArray(integracao.contas)?integracao.contas:[];
   const dataBase=dataInicial?new Date(dataInicial):new Date();
-  const dataLocal=new Date(dataBase.getTime()-dataBase.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  const dataLocal=dataHoraLocalFinancas(dataBase);
   return new Promise(resolve=>{
     document.getElementById('confirmar-baixa-rapida-receber')?.remove();
     const modal=document.createElement('div');
@@ -499,11 +503,10 @@ async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atuali
   try{integracao=await carregarIntegracaoFinancas('entrada');}
   catch(e){return {ok:false,message:'Não foi possível consultar o Finanças: '+(e.message||e)};}
   if(!integracao.ativa)return {ok:true,ativa:false};
-  // A conta prevista na venda nao determina onde o dinheiro realmente entrou.
-  // Em toda baixa, exigir confirmacao da conta efetiva; contaInformada so e
-  // aceita quando foi escolhida no proprio fluxo de baixa (ex.: baixa em lote).
+  // A conta da liberacao e apenas o padrao. O usuario pode escolher outra
+  // conta na baixa, pois ela deve refletir onde o dinheiro realmente entrou.
   let contaId=Number(contaInformada||0);
-  if(!contaId)contaId=Number(await solicitarContaFinancasBaixa(integracao.contas)||0);
+  if(!contaId)contaId=Number(await solicitarContaFinancasBaixa(integracao.contas,conta?.id_conta_financas)||0);
   if(!contaId)return {ok:false,cancelada:true,message:'Baixa cancelada: selecione a conta do Finanças.'};
   return {ok:true,ativa:true,contaId,integracao};
 }
@@ -556,7 +559,7 @@ async function corrigirContaRecebimentoFinancas(idConta){
 
 async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
   const valor = Number(valorBaixa || 0);
-  if(!conta || valor <= 0) return { ok:false, message:'Informe um valor de baixa maior que zero.' };
+  if(!conta || !Number.isFinite(valor) || valor <= 0) return { ok:false, message:'Informe um valor de baixa maior que zero.' };
   const recebidoAtual = contasValorRecebido(conta);
   const saldoAtual = contasValorAberto(conta);
   if(saldoAtual <= 0.005) return { ok:false, message:'Esta conta ja esta quitada.' };
@@ -580,7 +583,7 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     meio_pagamento: meio,
     observacoes,
     ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
-  },{sincronizarFinancas:atualizarFinancas});
+  },{sincronizarFinancas:false});
   let avisoSincronizacao=null;
   if(!res.ok){
     const mensagem=res.data?.message||`Erro ao baixar conta ${conta.id_conta}`;
@@ -589,7 +592,7 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
   }
   invalidarResumoContasVendas();
 
-  await registrarBaixaContaReceber({
+  const baixaRegistrada = await registrarBaixaContaReceber({
     id_conta: conta.id_conta,
     id_cliente: conta.id_cliente,
     valor_baixa: aplicado,
@@ -597,18 +600,16 @@ async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
     meio_pagamento: meio,
     observacoes: opcoes.observacoes || null
   });
+  if(!baixaRegistrada)return {ok:false,message:'O titulo foi atualizado, mas nao foi possivel registrar o historico da baixa.'};
 
-  let tituloAtualizado={...conta,...(res.data?.[0]||{}),valor_recebido:novoRecebido,status_recebimento:status,data_recebimento:dataBaixa,meio_pagamento:meio,observacoes};
+  const tituloAtualizado={...conta,...(res.data?.[0]||{}),valor_recebido:novoRecebido,status_recebimento:status,data_recebimento:dataBaixa,meio_pagamento:meio,observacoes};
   if(financeiro.ativa){
-    if(!tituloAtualizado.id_movimento_financas){
-      const descricao=conta.codigo_venda?`Venda ${conta.codigo_venda}`:`Recebimento #${conta.id_conta}`;
-      const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',[tituloAtualizado],{ativa:true,tipo:'entrada',contaId:financeiro.contaId,categoria:financeiro.integracao.categoria,descricao,documento:conta.codigo_venda||null});
-      if(!vinculo.ok)return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas a integração com o Finanças falhou: ${vinculo.message}`};
-      const recarregada=await apiGet(`contas_receber?select=*&id_conta=eq.${conta.id_conta}&limit=1`);
-      tituloAtualizado=Array.isArray(recarregada)&&recarregada[0]?recarregada[0]:tituloAtualizado;
-    }
-    try{await sincronizarTituloFinanceiroAposAlteracao('contas_receber',tituloAtualizado);avisoSincronizacao=null;}
-    catch(e){return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas não foi possível atualizar o Finanças: ${e.message||e}`};}
+    try{
+      const idMovimento=await criarMovimentoBaixaReceberFinancas({baixa:baixaRegistrada,conta:financeiro.contaId,titulo:tituloAtualizado,integracao:financeiro.integracao});
+      if(!idMovimento)throw new Error('O Financas nao retornou o identificador do movimento.');
+      await sincronizarTituloFinanceiroAposAlteracao('contas_receber',tituloAtualizado);
+      avisoSincronizacao=null;
+    }catch(e){return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas nao foi possivel atualizar o Financas: ${e.message||e}`};}
   }
 
   return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),conta:res.data?.[0],aviso:avisoSincronizacao};

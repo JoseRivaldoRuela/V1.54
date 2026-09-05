@@ -33,8 +33,9 @@ async function validarCadastroDuplicado(p,b){
       const repetido=existentes.concat(vistos).find(x=>(documento&&apiDocumentoDuplicidade(x.cpf_cnpj)===documento)||nomes.some(n=>[x.razao_social,x.nome_fantasia].map(apiNormalizarDuplicidade).includes(n)));
       if(repetido)return `Fornecedor já cadastrado: ${repetido.nome_fantasia||repetido.razao_social}.`;
     }else{
+      if(novo.ativo===false)continue;
       const nome=apiNormalizarDuplicidade(novo.nome_mercadoria);
-      const repetido=existentes.concat(vistos).find(x=>nome&&apiNormalizarDuplicidade(x.nome_mercadoria)===nome);
+      const repetido=existentes.concat(vistos).find(x=>x.ativo!==false&&nome&&apiNormalizarDuplicidade(x.nome_mercadoria)===nome);
       if(repetido)return `Produto já cadastrado: ${repetido.nome_mercadoria}.`;
     }
     vistos.push(novo);

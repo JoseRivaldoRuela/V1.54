@@ -915,7 +915,7 @@ async function renderFormVenda(c) {
         <div class="form-group">
           <label class="form-label">Preço Unitário (R$)</label>
           <input class="form-input" type="number" step="0.01" id="item-preco" value="" placeholder="0,00" oninput="calcItemSubtotal();atualizarOpcaoPrecoEspecialVenda()"/>
-          <label id="opcao-preco-especial-venda" style="display:none;align-items:flex-start;gap:8px;margin-top:7px;padding:8px;border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:11px;color:var(--text2);"><input type="checkbox" id="item-salvar-preco-especial" style="margin-top:2px;"/><span>Salvar este valor como pre&ccedil;o especial para o cliente</span></label>
+          <div id="opcao-preco-especial-venda" style="display:none;margin-top:5px;padding:6px 8px;border:1px solid rgba(0,229,160,.3);border-radius:7px;font-size:11px;color:var(--accent);">Este valor será salvo automaticamente como preço especial do cliente.</div>
         </div>
         <div class="form-group">
           <label class="form-label">Desconto por Unidade (R$)</label>
@@ -1052,22 +1052,37 @@ function preencherPreco() {
 }
 
 function atualizarOpcaoPrecoEspecialVenda(){
-  const painel=document.getElementById('opcao-preco-especial-venda'), check=document.getElementById('item-salvar-preco-especial'), campo=document.getElementById('item-preco');
+  const painel=document.getElementById('opcao-preco-especial-venda'), campo=document.getElementById('item-preco');
   const produto=cacheProdutos.find(p=>String(p.id_produto)===String(document.getElementById('item-produto')?.value));
   const preco=numeroVenda(campo?.value), cadastro=Number(produto?.preco_venda||0), especial=Number(campo?.dataset.precoEspecial||0);
   const diferente=!!produto&&preco>0&&Math.abs(preco-cadastro)>0.005;
   const jaCadastrado=!!campo?.dataset.idPrecoEspecial&&Math.abs(preco-especial)<=0.005;
-  if(painel)painel.style.display=diferente&&!jaCadastrado?'flex':'none';
-  if(check&&(!diferente||jaCadastrado))check.checked=false;
+  if(painel)painel.style.display=diferente&&!jaCadastrado?'block':'none';
 }
 
 async function salvarPrecoEspecialDoItem(idCliente,idProduto,preco){
-  const campo=document.getElementById('item-preco'), id=campo?.dataset.idPrecoEspecial;
+  const existentes=await apiGet(`produtos_precos_especiais?select=id_preco_especial,preco_especial&id_cliente=eq.${Number(idCliente)}&id_produto=eq.${Number(idProduto)}&limit=1`);
+  if(!Array.isArray(existentes)){toast('Nao foi possivel consultar o preco especial.','error');return false;}
+  const id=existentes[0]?.id_preco_especial;
   const data={id_cliente:Number(idCliente),id_produto:Number(idProduto),preco_especial:Number(preco),observacoes:'Cadastrado durante o pedido de venda'};
   const res=id?await apiPatch(`produtos_precos_especiais?id_preco_especial=eq.${id}`,data):await apiPost('produtos_precos_especiais',data);
   if(!res.ok){toast('Nao foi possivel salvar o preco especial.','error');return false;}
-  toast(id?'Preco especial atualizado.':'Preco especial cadastrado para o cliente.','success');
   return true;
+}
+
+async function sincronizarPrecosEspeciaisDaVenda(idCliente,itens){
+  const porProduto=new Map();
+  (Array.isArray(itens)?itens:[]).forEach(item=>porProduto.set(Number(item.id_produto),item));
+  let alterados=0;
+  for(const [idProduto,item] of porProduto){
+    const produto=cacheProdutos.find(p=>Number(p.id_produto)===idProduto);
+    const precoNormal=Number(produto?.preco_venda||0);
+    const precoVenda=Number(item.preco_unitario||0);
+    if(!produto||precoVenda<=0||Math.abs(precoVenda-precoNormal)<=0.005)continue;
+    if(!await salvarPrecoEspecialDoItem(idCliente,idProduto,precoVenda))return {ok:false,alterados};
+    alterados++;
+  }
+  return {ok:true,alterados};
 }
 
 async function aplicarPadraoClienteVenda(forcar=false) {
@@ -1127,12 +1142,6 @@ async function adicionarItem() {
   if(preco<=0){ toast('Preço deve ser maior que zero','error'); return; }
   if(desc<0){toast('O desconto do item não pode ser negativo.','error');return;}
   if(desc>preco+0.005){toast('O desconto por unidade não pode ser maior que o preço unitário.','error');return;}
-
-  if(document.getElementById('item-salvar-preco-especial')?.checked){
-    const idCliente=document.getElementById('f-id_cliente')?.value;
-    if(!idCliente){toast('Selecione o cliente antes de cadastrar o preco especial.','error');return;}
-    if(!await salvarPrecoEspecialDoItem(idCliente,idProd,preco))return;
-  }
 
   const subtotal = Math.max(0,qty*(preco-desc));
   const prodCache = cacheProdutos.find(p=>String(p.id_produto)===String(idProd));
@@ -1702,7 +1711,7 @@ async function insertVendaItens(vendaId, itens = itensVenda) {
 }
 
 async function getItensEstoqueVenda(idVenda) {
-  const itens = await apiGet(`venda_itens?select=id_produto,quantidade,produtos!fk_item_produto(id_produto,nome_mercadoria,estoque_atual)&id_venda=eq.${idVenda}`);
+  const itens = await apiGet(`venda_itens?select=id_produto,quantidade,produtos!fk_item_produto(id_produto,nome_mercadoria,estoque_atual,aceita_faturar_sem_saldo)&id_venda=eq.${idVenda}`);
   if(!Array.isArray(itens)) return [];
 
   const porProduto = new Map();
@@ -1712,7 +1721,8 @@ async function getItensEstoqueVenda(idVenda) {
       id_produto: idProduto,
       nome: item.produtos?.nome_mercadoria || `Produto #${idProduto}`,
       quantidade: 0,
-      estoque_atual: Number(item.produtos?.estoque_atual || 0)
+      estoque_atual: Number(item.produtos?.estoque_atual || 0),
+      aceita_faturar_sem_saldo:item.produtos?.aceita_faturar_sem_saldo!==false
     };
     atual.quantidade += Number(item.quantidade || 0);
     porProduto.set(idProduto, atual);
@@ -1725,19 +1735,74 @@ async function ajustarEstoqueVenda(idVenda, operacao) {
   const itens = await getItensEstoqueVenda(idVenda);
   if(!itens.length) return { ok:false, message:'A venda não possui itens acessíveis para ajustar o estoque. Confira se os produtos ainda existem nesta empresa.' };
 
-  for(const item of itens) {
-    if(!item.id_produto || !Number.isFinite(item.quantidade) || item.quantidade <= 0) {
-      return { ok:false, message:`Item inválido no estoque: ${item.nome || 'produto sem identificação'}.` };
+  const invalido=itens.find(item=>!item.id_produto||!Number.isFinite(item.quantidade)||item.quantidade<=0);
+  if(invalido)return {ok:false,message:`Item inválido no estoque: ${invalido.nome||'produto sem identificação'}. Corrija o item do pedido e tente novamente.`};
+
+  if(operacao==='baixar'){
+    const insuficientes=itens.filter(item=>item.aceita_faturar_sem_saldo===false&&item.estoque_atual+0.000001<item.quantidade);
+    if(insuficientes.length){
+      const detalhes=insuficientes.map(item=>`${item.nome}: disponível ${item.estoque_atual}, necessário ${item.quantidade}`).join('; ');
+      return {ok:false,message:`Estoque insuficiente. ${detalhes}. Ajuste o estoque ou a quantidade do pedido e tente novamente.`};
     }
+  }
+
+  const alterados=[];
+  for(const item of itens) {
     const novoEstoque = operacao === 'baixar'
       ? item.estoque_atual - item.quantidade
       : item.estoque_atual + item.quantidade;
     const res = await apiPatch(`produtos?id_produto=eq.${item.id_produto}`,{estoque_atual:novoEstoque});
-    if(!res.ok) return { ok:false, message:`Produto ${item.nome}: ${res.data?.message || 'a atualização foi recusada pelo banco.'}` };
-    if(!Array.isArray(res.data) || !res.data.length) return { ok:false, message:`Produto ${item.nome} não foi encontrado na empresa atual ou não pôde ser atualizado.` };
+    if(!res.ok || !Array.isArray(res.data) || !res.data.length) {
+      for(const anterior of alterados)await apiPatch(`produtos?id_produto=eq.${anterior.id_produto}`,{estoque_atual:anterior.estoque_atual});
+      const motivo=res.ok
+        ? `Produto ${item.nome} não foi encontrado na empresa atual ou não pôde ser atualizado.`
+        : `Produto ${item.nome}: ${res.data?.message || 'a atualização foi recusada pelo banco.'}`;
+      return {ok:false,message:`${motivo} Nenhum ajuste de estoque foi mantido.`};
+    }
+    alterados.push(item);
   }
 
-  return { ok:true };
+  return { ok:true, itens:alterados };
+}
+
+async function restaurarAjusteEstoqueVenda(itens){
+  let ok=true;
+  for(const item of Array.isArray(itens)?itens:[]){
+    const res=await apiPatch(`produtos?id_produto=eq.${item.id_produto}`,{estoque_atual:item.estoque_atual});
+    if(!res.ok||!Array.isArray(res.data)||!res.data.length)ok=false;
+  }
+  return ok;
+}
+
+async function restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores){
+  try{
+    const anteriores=Array.isArray(titulosAnteriores)?titulosAnteriores:[];
+    const idsAnteriores=new Set(anteriores.map(t=>Number(t.id_conta)).filter(Boolean));
+    const atuais=await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}`);
+    if(!Array.isArray(atuais))return false;
+
+    // Cancela somente movimentos criados ou trocados nesta tentativa.
+    const movimentosNovos=atuais.filter(atual=>{
+      const anterior=anteriores.find(t=>Number(t.id_conta)===Number(atual.id_conta));
+      return atual.id_movimento_financas&&Number(atual.id_movimento_financas)!==Number(anterior?.id_movimento_financas||0);
+    });
+    await cancelarMovimentosFinancas(movimentosNovos);
+
+    const novos=atuais.map(t=>Number(t.id_conta)).filter(id=>id&&!idsAnteriores.has(id));
+    if(novos.length&&!await apiDelete(`contas_receber?id_conta=in.(${novos.join(',')})`))return false;
+
+    const campos=['id_venda','id_cliente','data_vencimento','valor_original','valor_recebido','meio_pagamento','status_recebimento','data_recebimento','observacoes','grupo_parcelamento','numero_parcela','total_parcelas','valor_total_titulo','id_conta_financas','id_movimento_financas'];
+    for(const anterior of anteriores){
+      const dados={};
+      campos.forEach(campo=>{dados[campo]=anterior[campo]??null;});
+      const res=await apiPatch(`contas_receber?id_conta=eq.${anterior.id_conta}`,dados,{sincronizarFinancas:false});
+      if(!res.ok||!Array.isArray(res.data)||!res.data.length)return false;
+    }
+    return true;
+  }catch(e){
+    console.error('Falha ao restaurar financeiro da entrega:',e);
+    return false;
+  }
 }
 
 async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
@@ -1937,6 +2002,14 @@ async function saveVenda() {
     }
   }
 
+  const especiais=await sincronizarPrecosEspeciaisDaVenda(Number(id_cliente),itensVenda);
+  if(!especiais.ok){
+    toast('A venda foi salva, mas não foi possível cadastrar todos os preços especiais. Tente salvar novamente.','error');
+    btn.disabled=false;
+    btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+    return;
+  }
+
   if(status === 'ENTREGUE') {
     const contasRes = await gerarContasReceberVenda(vendaId, {
       ...dadosVenda,
@@ -1998,6 +2071,14 @@ async function saveVenda() {
   if(venda) showHeader(venda.codigo_venda||`Venda #${vendaId}`, `#${vendaId}`, `cadastrado em ${new Date(venda.data_cadastro||Date.now()).toLocaleDateString('pt-BR')}`);
 }
 
+async function ultimaContaFinancasCliente(idCliente,contasAtivas=[]){
+  const id=Number(idCliente||0);
+  if(!id)return null;
+  const historico=await apiGet(`contas_receber?select=id_conta_financas,data_recebimento,id_conta&id_cliente=eq.${id}&id_conta_financas=not.is.null&order=data_recebimento.desc.nullslast,id_conta.desc&limit=1`);
+  const contaId=Number(Array.isArray(historico)?historico[0]?.id_conta_financas:0)||null;
+  return contaId&&(Array.isArray(contasAtivas)?contasAtivas:[]).some(c=>Number(c.id_conta)===contaId)?contaId:null;
+}
+
 async function marcarEntregue(idVenda) {
   await loadCacheCobrancas();
   const venda = items.find(x=>x.id_venda===idVenda) || {};
@@ -2005,6 +2086,11 @@ async function marcarEntregue(idVenda) {
   try{integracao=await carregarIntegracaoFinancas('entrada');}catch(e){toast('Não foi possível consultar o Finanças: '+e.message,'error');return;}
   if(integracao.ativa&&!integracao.categoria){toast('Cadastre a categoria Vendas no sistema Finanças.','error');return;}
   if(integracao.ativa&&!integracao.contas.length){toast('Cadastre uma conta ativa no sistema Finanças.','error');return;}
+  let contaFinancasPadrao=Number(venda.id_conta_financas||0)||null;
+  if(integracao.ativa&&!contaFinancasPadrao){
+    try{contaFinancasPadrao=await ultimaContaFinancasCliente(venda.id_cliente,integracao.contas);}
+    catch(e){console.error('Não foi possível obter a última conta do cliente:',e);}
+  }
   const pagamentoAtual = venda.meio_pagamento || '';
   const vencimentoAtual = venda.data_vencimento || toLocalDateInput();
   const parcelasAtual = Math.max(1, Number(venda.quantidade_parcelas || 1));
@@ -2024,7 +2110,7 @@ async function marcarEntregue(idVenda) {
             <label class="form-label">Data de Entrega</label>
             <input class="form-input" type="datetime-local" id="entrega-data" value="${toLocalDateTimeInput()}"/>
           </div>
-          ${integracao.ativa?`<div class="form-group" style="margin-bottom:14px;"><label class="form-label">Conta no Finanças *</label><select class="form-input form-select" id="entrega-conta-financas">${opcoesContasFinancas(integracao.contas,venda.id_conta_financas)}</select><div style="font-size:11px;color:var(--text3);">Categoria: Vendas · lançamento pendente até o recebimento.</div></div>`:''}
+          ${integracao.ativa?`<div class="form-group" style="margin-bottom:14px;"><label class="form-label">Conta padrão no Finanças *</label><select class="form-input form-select" id="entrega-conta-financas">${opcoesContasFinancas(integracao.contas,contaFinancasPadrao)}</select><div style="font-size:11px;color:var(--text3);">${contaFinancasPadrao?'Última conta utilizada para este cliente. ':''}Será o padrão do recebimento e poderá ser alterada na baixa.</div></div>`:''}
           <div class="form-group" style="margin-bottom:14px;">
             <label class="form-label">Meio de Pagamento</label>
             <select class="form-input form-select" id="entrega-pagamento">
@@ -2076,6 +2162,12 @@ async function confirmarEntrega(idVenda) {
 
   // Atualizar venda
   const venda = items.find(x=>x.id_venda===idVenda);
+  const titulosAnteriores=await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc,id_conta.asc`);
+  if(!Array.isArray(titulosAnteriores)){
+    toast('Entrega não confirmada. Não foi possível conferir o financeiro atual do pedido. Tente novamente.','error');
+    if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
+    return;
+  }
   const dataEntregaISO = localDateTimeToISO(dataEntrega) || new Date().toISOString();
   const dadosEntrega = {
     status_entrega:'ENTREGUE',
@@ -2086,9 +2178,31 @@ async function confirmarEntrega(idVenda) {
     data_vencimento: vencimento||null
   };
   if(contaFinancas)dadosEntrega.id_conta_financas=contaFinancas;
+  const dadosVendaAnteriores={
+    status_entrega:venda?.status_entrega||'PENDENTE',
+    data_entrega:venda?.data_entrega||null,
+    meio_pagamento:venda?.meio_pagamento||null,
+    quantidade_parcelas:venda?.quantidade_parcelas||null,
+    dias_vencimento:venda?.dias_vencimento||null,
+    data_vencimento:venda?.data_vencimento||null,
+    id_conta_financas:venda?.id_conta_financas||null
+  };
+
+  // A baixa precisa concluir antes de gravar a entrega. Assim um erro de
+  // estoque mantem o pedido pendente e nao gera financeiro inconsistente.
+  let estoqueRes={ok:true,itens:[]};
+  if(venda?.status_entrega !== 'ENTREGUE'){
+    estoqueRes=await ajustarEstoqueVenda(idVenda,'baixar');
+    if(!estoqueRes.ok){
+      toast(`Entrega não confirmada. ${estoqueRes.message}`,'error');
+      if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
+      return;
+    }
+  }
   const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`, dadosEntrega);
   if(!vendaRes.ok) {
-    toast('Erro ao confirmar entrega: '+(vendaRes.data?.message||'erro'),'error');
+    const estoqueRestaurado=await restaurarAjusteEstoqueVenda(estoqueRes.itens);
+    toast('Entrega não confirmada: '+(vendaRes.data?.message||'erro')+(estoqueRestaurado?' O estoque foi restaurado.':' ATENÇÃO: confira o estoque, pois a restauração falhou.'),'error');
     if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
     return;
   }
@@ -2104,21 +2218,35 @@ async function confirmarEntrega(idVenda) {
   });
   if(!contaRes.ok) {
     console.error('Erro ao salvar conta a receber:', contaRes.data);
-    toast('Entrega confirmada mas houve erro ao gerar conta a receber: '+(contaRes.data?.message||''),'error');
+    const [estoqueRestaurado,financeiroRestaurado,vendaRestaurada]=await Promise.all([
+      restaurarAjusteEstoqueVenda(estoqueRes.itens),
+      restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores),
+      apiPatch(`vendas?id_venda=eq.${idVenda}`,dadosVendaAnteriores)
+    ]);
+    const reversaoOk=estoqueRestaurado&&financeiroRestaurado&&vendaRestaurada.ok;
+    toast(`Entrega não confirmada: ${contaRes.data?.message||'erro ao gerar contas a receber'}.${reversaoOk?' Pedido, estoque e financeiro foram restaurados.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
     if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
     return;
   }
   if(contaFinancas){
-    const integracao=await carregarIntegracaoFinancas('entrada');
-    const titulos=await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc`);
-    const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',titulos,{ativa:true,tipo:'entrada',contaId:contaFinancas,categoria:integracao.categoria,descricao:`Venda ${venda.codigo_venda||'#'+idVenda}`,documento:venda.codigo_venda});
-    if(!vinculo.ok){toast('Entrega confirmada, mas a integração financeira falhou: '+vinculo.message,'error');return;}
-  }
-
-  if(venda?.status_entrega !== 'ENTREGUE') {
-    const estoqueRes = await ajustarEstoqueVenda(idVenda, 'baixar');
-    if(!estoqueRes.ok) {
-      toast('Entrega confirmada, mas houve erro ao baixar estoque: '+estoqueRes.message,'error');
+    let erroFinancas=null;
+    try{
+      const integracao=await carregarIntegracaoFinancas('entrada');
+      const titulos=await apiGet(`contas_receber?select=*&id_venda=eq.${idVenda}&order=numero_parcela.asc`);
+      if(!Array.isArray(titulos))throw new Error('não foi possível conferir as contas a receber geradas');
+      const vinculo=await vincularMovimentosFinancas('contas_receber','id_conta',titulos,{ativa:true,tipo:'entrada',contaId:contaFinancas,categoria:integracao.categoria,descricao:`Venda ${venda.codigo_venda||'#'+idVenda}`,documento:venda.codigo_venda});
+      if(!vinculo.ok)throw new Error(vinculo.message);
+    }catch(e){erroFinancas=e;}
+    if(erroFinancas){
+      const [estoqueRestaurado,financeiroRestaurado,vendaRestaurada]=await Promise.all([
+        restaurarAjusteEstoqueVenda(estoqueRes.itens),
+        restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores),
+        apiPatch(`vendas?id_venda=eq.${idVenda}`,dadosVendaAnteriores)
+      ]);
+      const reversaoOk=estoqueRestaurado&&financeiroRestaurado&&vendaRestaurada.ok;
+      toast(`Entrega não confirmada porque o Finanças falhou: ${erroFinancas.message||erroFinancas}.${reversaoOk?' Pedido, estoque e contas a receber foram restaurados.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
+      if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
+      return;
     }
   }
 
@@ -2132,6 +2260,15 @@ async function cancelarEntrega(idVenda) {
   const codigo = venda?.codigo_venda ? ` ${venda.codigo_venda}` : '';
   if(!confirm(`Cancelar a entrega${codigo}? A venda voltará para PENDENTE e as contas a receber vinculadas serão excluídas.`)) return;
 
+  let estoqueRes={ok:true,itens:[]};
+  if(venda?.status_entrega === 'ENTREGUE') {
+    estoqueRes=await ajustarEstoqueVenda(idVenda,'devolver');
+    if(!estoqueRes.ok){
+      toast('Entrega não cancelada. Não foi possível devolver o estoque: '+estoqueRes.message,'error');
+      return;
+    }
+  }
+
   const res = await apiPatch(`vendas?id_venda=eq.${idVenda}`,{
     status_entrega:'PENDENTE',
     data_entrega:null,
@@ -2139,15 +2276,9 @@ async function cancelarEntrega(idVenda) {
     data_vencimento:null
   });
   if(!res.ok) {
-    toast('Erro ao cancelar entrega: '+(res.data?.message||'erro'),'error');
+    const estoqueRestaurado=await restaurarAjusteEstoqueVenda(estoqueRes.itens);
+    toast('Entrega não cancelada: '+(res.data?.message||'erro')+(estoqueRestaurado?' O estoque permaneceu como estava.':' ATENÇÃO: confira o estoque, pois a restauração falhou.'),'error');
     return;
-  }
-
-  if(venda?.status_entrega === 'ENTREGUE') {
-    const estoqueRes = await ajustarEstoqueVenda(idVenda, 'devolver');
-    if(!estoqueRes.ok) {
-      toast('Entrega cancelada, mas houve erro ao devolver estoque: '+estoqueRes.message,'error');
-    }
   }
 
   const contasOk = await apiDelete(`contas_receber?id_venda=eq.${idVenda}`);

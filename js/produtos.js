@@ -51,7 +51,7 @@ async function loadCaches() {
   const[t,f,p,c]=await Promise.all([
     apiGet('tipo_mercadoria?select=id_tipo,descricao&order=descricao.asc'),
     apiGet('fornecedores?select=id_fornecedor,nome_fantasia,razao_social,cpf_cnpj,ativo&order=razao_social.asc'),
-    apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo,id_tipo,tipo_mercadoria(descricao)&ativo=eq.true&order=nome_mercadoria.asc'),
+    apiGet('produtos?select=id_produto,nome_mercadoria,preco_venda,preco_custo,estoque_atual,unidade,quantidade_fardo,aceita_faturar_sem_saldo,id_tipo,tipo_mercadoria(descricao)&ativo=eq.true&order=nome_mercadoria.asc'),
     apiGet('clientes?select=*&order=razao_social.asc')
   ]);
   if(Array.isArray(t)) cacheTipos=ordenarCadastro(t,x=>x.descricao);
@@ -945,6 +945,10 @@ async function renderFormProduto(c) {
       <div class="toggle-info"><strong>Produto Ativo</strong><span>Produtos inativos não aparecem nas listagens</span></div>
       <label class="toggle"><input type="checkbox" id="f-ativo" ${(!c||c.ativo)?'checked':''}/><span class="toggle-slider"></span></label>
     </div>
+    <div class="toggle-row">
+      <div class="toggle-info"><strong>Aceita faturar sem saldo</strong><span>Permite entregar o pedido e deixar o estoque negativo</span></div>
+      <label class="toggle"><input type="checkbox" id="f-aceita_faturar_sem_saldo" ${(!c||c.aceita_faturar_sem_saldo!==false)?'checked':''}/><span class="toggle-slider"></span></label>
+    </div>
     <div class="form-actions">
       <button class="btn btn-primary" id="btn-save" onclick="saveProduto()">${isNew?'+ Cadastrar':'✓ Salvar'}</button>
       ${!isNew?`<button class="btn btn-danger" onclick="toggleAtivo()">${c&&c.ativo?'✕ Desativar':'✓ Reativar'}</button>`:''}
@@ -975,7 +979,7 @@ async function saveProduto() {
   if(!custo||!venda){toast('Precos obrigatorios','error');return;}
   const btn=document.getElementById('btn-save'); btn.disabled=true; btn.textContent='Salvando...';
   const qtdFardo = parseFloat(document.getElementById('f-quantidade_fardo')?.value || '');
-  const data={nome_mercadoria:nome,id_tipo:parseInt(id_tipo),id_fornecedor:document.getElementById('f-id_fornecedor').value?parseInt(document.getElementById('f-id_fornecedor').value):null,unidade:document.getElementById('f-unidade').value||null,estoque_atual:parseFloat(document.getElementById('f-estoque_atual').value)||0,quantidade_fardo:Number.isFinite(qtdFardo)&&qtdFardo>0?qtdFardo:null,preco_custo:parseFloat(custo),preco_venda:parseFloat(venda),observacoes:document.getElementById('f-observacoes').value.trim()||null,ativo:document.getElementById('f-ativo').checked};
+  const data={nome_mercadoria:nome,id_tipo:parseInt(id_tipo),id_fornecedor:document.getElementById('f-id_fornecedor').value?parseInt(document.getElementById('f-id_fornecedor').value):null,unidade:document.getElementById('f-unidade').value||null,estoque_atual:parseFloat(document.getElementById('f-estoque_atual').value)||0,quantidade_fardo:Number.isFinite(qtdFardo)&&qtdFardo>0?qtdFardo:null,preco_custo:parseFloat(custo),preco_venda:parseFloat(venda),observacoes:document.getElementById('f-observacoes').value.trim()||null,ativo:document.getElementById('f-ativo').checked,aceita_faturar_sem_saldo:document.getElementById('f-aceita_faturar_sem_saldo').checked};
   if(isNew){
     const{ok,data:res}=await apiPost('produtos',data);
     if(ok){toast('Produto cadastrado!','success');await loadCaches();await finalizarCadastroNovo();}

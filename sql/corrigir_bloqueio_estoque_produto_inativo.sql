@@ -1,15 +1,6 @@
--- Impede novos fornecedores e produtos duplicados dentro da mesma empresa.
--- Pode ser executado mesmo que já existam duplicidades antigas; ele não apaga dados.
+-- Corrige a regra de duplicidade que bloqueava atualizacoes apenas de estoque.
+-- Produtos inativos legados/importados nao impedem o uso do cadastro ativo.
 begin;
-
-create or replace function public.normalizar_cadastro_duplicado(valor text)
-returns text language sql immutable as $$
-  select regexp_replace(
-    translate(lower(trim(coalesce(valor,''))),
-      'áàâãäéèêëíìîïóòôõöúùûüçñ',
-      'aaaaaeeeeiiiiooooouuuucn'),
-    '[^a-z0-9]+', '', 'g');
-$$;
 
 create or replace function public.bloquear_cadastro_duplicado()
 returns trigger language plpgsql security definer set search_path=public as $$
@@ -41,12 +32,9 @@ begin
 end;
 $$;
 
-drop trigger if exists fornecedores_sem_duplicidade on public.fornecedores;
-create trigger fornecedores_sem_duplicidade before insert or update on public.fornecedores
-for each row execute function public.bloquear_cadastro_duplicado();
-
 drop trigger if exists produtos_sem_duplicidade on public.produtos;
-create trigger produtos_sem_duplicidade before insert or update of nome_mercadoria, empresa_id, ativo on public.produtos
+create trigger produtos_sem_duplicidade
+before insert or update of nome_mercadoria, empresa_id, ativo on public.produtos
 for each row execute function public.bloquear_cadastro_duplicado();
 
 commit;

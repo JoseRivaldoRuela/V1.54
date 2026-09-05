@@ -1015,6 +1015,35 @@ async function abrirLiberacaoCompra(idCompra) {
     </div>`);
 }
 
+function escolherAjustePrecosEspeciais(nomeProduto,precoAnterior,precoNovo){
+  return new Promise(resolve=>{
+    document.getElementById('ajuste-precos-especiais-modal')?.remove();
+    const percentual=precoAnterior>0?((precoNovo/precoAnterior)-1)*100:null;
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';modal.id='ajuste-precos-especiais-modal';modal.style.display='flex';
+    modal.innerHTML=`<div class="modal" style="max-width:520px;"><div class="modal-header"><span class="modal-title">Ajustar preços especiais</span></div><div class="modal-body"><p data-mensagem style="font-size:13px;line-height:1.5;margin-bottom:10px;"></p><div class="search-banner" style="margin:0;">Escolha como atualizar os preços especiais já cadastrados para este produto.</div></div><div class="modal-footer" style="flex-wrap:wrap;"><button type="button" class="btn btn-secondary" data-acao="percentual">Reajustar ${percentual===null?'na mesma proporção':`${percentual>=0?'+':''}${percentual.toFixed(2)}%`}</button><button type="button" class="btn btn-primary" data-acao="igualar">Deixar igual ao preço de venda</button></div></div>`;
+    modal.querySelector('[data-mensagem]').textContent=`${nomeProduto}: o preço de venda mudou de ${compraFmt(precoAnterior)} para ${compraFmt(precoNovo)}.`;
+    const botaoPercentual=modal.querySelector('[data-acao="percentual"]');
+    if(percentual===null){botaoPercentual.disabled=true;botaoPercentual.title='O preço anterior é zero; não existe percentual de reajuste.';}
+    const concluir=acao=>{modal.remove();resolve(acao);};
+    modal.querySelector('[data-acao="percentual"]').onclick=()=>concluir('percentual');
+    modal.querySelector('[data-acao="igualar"]').onclick=()=>concluir('igualar');
+    document.body.appendChild(modal);
+  });
+}
+
+async function ajustarPrecosEspeciaisProduto(idProduto,precoAnterior,precoNovo,modo){
+  const especiais=await apiGet(`produtos_precos_especiais?select=id_preco_especial,preco_especial&id_produto=eq.${Number(idProduto)}&limit=10000`);
+  if(!Array.isArray(especiais))return {ok:false,message:'não foi possível consultar os preços especiais'};
+  const fator=precoAnterior>0?precoNovo/precoAnterior:1;
+  for(const especial of especiais){
+    const novo=modo==='igualar'?precoNovo:Number(especial.preco_especial||0)*fator;
+    const res=await apiPatch(`produtos_precos_especiais?id_preco_especial=eq.${especial.id_preco_especial}`,{preco_especial:Number(novo.toFixed(2))});
+    if(!res.ok)return {ok:false,message:res.data?.message||'erro ao atualizar preço especial'};
+  }
+  return {ok:true,quantidade:especiais.length};
+}
+
 async function confirmarLiberacaoCompra(idCompra) {
   const compra = items.find(x=>Number(x.id_compra)===Number(idCompra));
   if(!compra){ toast('Compra não encontrada.','error'); return; }
@@ -1050,6 +1079,11 @@ async function confirmarLiberacaoCompra(idCompra) {
     }
     const custoAnterior = Number(produto.preco_custo || 0);
     const custoMudou = Math.abs(precoCusto - custoAnterior) >= 0.005;
+    const precoVendaAnterior=Number(produto.preco_venda||0);
+    const precoVendaMudou=Math.abs(precoVenda-precoVendaAnterior)>=0.005;
+    const modoPrecosEspeciais=precoVendaMudou
+      ? await escolherAjustePrecosEspeciais(item.nome_produto,precoVendaAnterior,precoVenda)
+      : null;
     let dataBaseCusto = '';
     if(custoMudou) {
       const sugestao = (compra.data_compra || '').slice(0,10);
@@ -1080,6 +1114,14 @@ async function confirmarLiberacaoCompra(idCompra) {
       for(const b of backups) await apiPatch(`produtos?id_produto=eq.${b.id_produto}`,{estoque_atual:b.estoque_anterior});
       toast('Erro ao atualizar produto: '+(prodRes.data?.message||'erro'),'error');
       return;
+    }
+    if(precoVendaMudou){
+      const ajuste=await ajustarPrecosEspeciaisProduto(item.id_produto,precoVendaAnterior,precoVenda,modoPrecosEspeciais);
+      if(!ajuste.ok){
+        toast(`O produto foi atualizado, mas os preços especiais de ${item.nome_produto} falharam: ${ajuste.message}.`,'error');
+        if(btn){btn.disabled=false;btn.textContent='Liberar';}
+        return;
+      }
     }
     if(custoMudou && dataBaseCusto && typeof aplicarCustoProdutoEmVendas === 'function') {
       try {
@@ -1246,7 +1288,7 @@ async function renderFormContaPagar(c) {
       <div class="form-group"><label class="form-label">Valor Pago</label><input class="form-input" type="text" inputmode="decimal" id="f-valor_pago" value="${v('valor_pago')}" ${isNew?'readonly':''}/></div>
       <div class="form-group"><label class="form-label">Meio de Pagamento</label><select class="form-input form-select" id="f-meio_pagamento"><option value="">Selecione...</option>${pagOpts}</select></div>
       <div class="form-group"><label class="form-label">1o vencimento</label><input class="form-input" type="date" id="f-data_vencimento" value="${vencimentoManual}"/></div>
-      <div class="form-group"><label class="form-label">Data de Pagamento</label><input class="form-input" type="datetime-local" id="f-data_pagamento" value="${v('data_pagamento')?String(v('data_pagamento')).slice(0,16):''}"/></div>
+      <div class="form-group"><label class="form-label">Data de Pagamento</label><input class="form-input" type="datetime-local" id="f-data_pagamento" value="${dataHoraLocalFinancas(v('data_pagamento'))}"/></div>
     </div>
     ${isNew ? `<div class="section-label"><span>Condição do lançamento</span></div>
     <div class="form-grid">
@@ -1260,6 +1302,10 @@ async function renderFormContaPagar(c) {
     </div>` : ''}
     <div class="section-label"><span>Observações</span></div>
     <div class="form-group"><textarea class="form-textarea" id="f-observacoes">${v('observacoes')}</textarea></div>
+    ${c && (c.status_pagamento==='PAGO'||Number(c.valor_pago||0)>0.005) && contaBaixaFinancas(c) ? `
+    <div class="section-label"><span>Baixa no Finanças</span></div>
+    <div class="form-group"><label class="form-label">Conta usada para o pagamento</label><div class="form-input" style="display:flex;align-items:center;background:var(--surface2);cursor:default;">${textoSeguroFinancas(contaBaixaFinancas(c))}</div></div>
+    ` : ''}
     <label style="display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" id="f-baixa-atualizar-financas" checked style="width:17px;height:17px;"><span style="font-size:12px;"><b>Atualizar o Finanças nas baixas e reativações</b><small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para alterar somente o Contas a Pagar.</small></span></label>
     <div class="form-actions">
       ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
@@ -1368,7 +1414,7 @@ function solicitarContaFinancasPagamento(contas,selecionada,dataInicial=null,opc
     const exigeConta=Array.isArray(contas)&&contas.length>0;
     const permiteEscolher=!!opcoes.mensagemConfirmacao;
     const dataBase=dataInicial?new Date(dataInicial):new Date();
-    const dataLocal=new Date(dataBase.getTime()-dataBase.getTimezoneOffset()*60000).toISOString().slice(0,16);
+    const dataLocal=dataHoraLocalFinancas(dataBase);
     document.getElementById('selecionar-conta-financas-pagamento')?.remove();
     const modal=document.createElement('div');
     modal.className='modal-overlay';modal.id='selecionar-conta-financas-pagamento';modal.style.display='flex';

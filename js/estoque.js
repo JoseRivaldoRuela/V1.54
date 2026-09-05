@@ -7,7 +7,7 @@ function formatDateTimeBR(value) {
 }
 
 async function getProdutoEstoque(idProduto) {
-  const data = await apiGet(`produtos?select=id_produto,nome_mercadoria,estoque_atual,preco_custo&id_produto=eq.${idProduto}`);
+  const data = await apiGet(`produtos?select=id_produto,nome_mercadoria,estoque_atual,preco_custo,preco_venda&id_produto=eq.${idProduto}`);
   return Array.isArray(data) && data.length ? data[0] : null;
 }
 
