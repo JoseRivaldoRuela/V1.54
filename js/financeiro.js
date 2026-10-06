@@ -1728,6 +1728,7 @@ async function renderDashboardContas() {
   body.innerHTML = `
     ${alertaIntegridade}
     ${painelConferencia}
+    <details open style="margin-bottom:14px;"><summary style="padding:10px 0;cursor:pointer;font-weight:600;">Conferencia Vendas x Financas</summary><div id="conferencia-financas-real">Consultando movimentos do Financas...</div></details>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
       <button class="dash-period-btn" onclick="mudarMesContasDashboard(-1)">‹ Mes anterior</button>
       <button class="dash-period-btn ${contasDashMesOffset===0?'active':''}" onclick="irMesAtualContasDashboard()">Mes atual</button>
@@ -1792,6 +1793,7 @@ async function renderDashboardContas() {
       </div>
     </div>`;
 
+  void renderConferenciaFinancas(contas);
   setTimeout(() => {
     const ctx = document.getElementById('chart-contas');
     if(!ctx) return;
