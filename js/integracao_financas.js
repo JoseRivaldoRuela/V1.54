@@ -76,7 +76,7 @@ async function empresaIntegraFinancas(){
   return integracaoFinancasAtivaCache;
 }
 
-async function carregarIntegracaoFinancas(uso){
+async function carregarIntegracaoFinancas(uso,opcoes={}){
   if(!await empresaIntegraFinancas())return {ativa:false,contas:[],categoria:null};
   const filtroTipo=uso==='saida'?'':'&tipo=neq.cartao';
   const [contas,categorias]=await Promise.all([
@@ -86,7 +86,7 @@ async function carregarIntegracaoFinancas(uso){
   salvarNomesContasFinancas(contas);
   const nomeCategoria=uso==='entrada'?'vendas':'compras';
   let categoria=(Array.isArray(categorias)?categorias:[]).find(c=>String(c.nome||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()===nomeCategoria);
-  if(!categoria){
+  if(!categoria&&opcoes.criarCategoria!==false){
     const criada=await financasRequest('categorias',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({nome:uso==='entrada'?'Vendas':'Compras',uso,tipo:null,cor:uso==='entrada'?'#19d89f':'#ff6174',descricao:'Categoria criada pela integração com o sistema Vendas',ativo:true})});
     categoria=Array.isArray(criada)?criada[0]:criada;
   }

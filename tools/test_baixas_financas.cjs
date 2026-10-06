@@ -1,15 +1,36 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const ctx = vm.createContext({console, Date, localStorage:{getItem:()=>null}});
+const storage=new Map();
+const ctx = vm.createContext({console, Date, crypto:require('node:crypto'), localStorage:{getItem:()=>null},
+  sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
+  sessaoAtual:()=>({empresa_id:'teste',id_usuario:1})});
 vm.runInContext(fs.readFileSync('js/integracao_financas.js','utf8'),ctx);
 vm.runInContext(fs.readFileSync('js/financeiro.js','utf8'),ctx);
+vm.runInContext(fs.readFileSync('js/baixa_atomica.js','utf8'),ctx);
 let movimentos=[], baixas=[], titulos=[];
 ctx.empresaIntegraFinancas=async()=>true;
 ctx.invalidarResumoContasVendas=()=>{};
 ctx.prepararIntegracaoBaixaContaReceber=async(c,id)=>({ok:true,ativa:true,contaId:id,integracao:{categoria:{id_categoria:1}}});
 ctx.apiGet=async path=>baixas.filter(b=>b.id_conta===Number(path.match(/id_conta=eq\.(\d+)/)[1]));
-ctx.apiPost=async(path,b)=>{const row={...b,id_baixa:baixas.length+1};baixas.push(row);return {ok:true,data:[row]};};
+// Stand-in for the transactional RPC; rollback itself is tested with PostgreSQL.
+ctx.apiPost=async(path,b)=>{
+  assert.equal(path,'rpc/baixar_contas_receber_atomico');
+  const resultado=[];
+  for(const item of b.p_itens){
+    const t=titulos.find(t=>t.id_conta===item.id_conta);
+    Object.assign(t,{valor_recebido:t.valor_recebido+item.valor,data_recebimento:b.p_data_baixa,
+      status_recebimento:t.valor_recebido+item.valor>=t.valor_original?'RECEBIDO':'PENDENTE'});
+    const baixa={id_baixa:baixas.length+1,id_conta:t.id_conta,valor_baixa:item.valor,data_baixa:b.p_data_baixa};
+    baixas.push(baixa);
+    await ctx.criarMovimentoBaixaReceberFinancas({baixa,conta:b.p_id_conta_financas,titulo:t,
+      integracao:{categoria:{id_categoria:1}}});
+    await ctx.sincronizarTituloFinanceiroAposAlteracao('contas_receber',t);
+    resultado.push({conta:t,aplicado:item.valor});
+  }
+  return {ok:true,data:{ok:true,titulos:resultado,qtd:resultado.length,
+    aplicado:resultado.reduce((s,r)=>s+r.aplicado,0)}};
+};
 ctx.apiPatch=async(path,b,opts)=>{
   assert.equal(opts.sincronizarFinancas,false);
   const t=titulos.find(t=>t.id_conta===Number(path.match(/id_conta=eq\.(\d+)/)[1]));

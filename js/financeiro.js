@@ -465,7 +465,7 @@ function solicitarContaFinancasBaixa(contas,selecionada=null) {
 
 async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null){
   let integracao={ativa:false,contas:[],categoria:null};
-  try{integracao=await carregarIntegracaoFinancas('entrada');}
+  try{integracao=await carregarIntegracaoFinancas('entrada',{criarCategoria:false});}
   catch(e){return {ok:false,message:'Nao foi possivel consultar o Financas: '+(e.message||e)};}
   const lista=integracao.ativa&&Array.isArray(integracao.contas)?integracao.contas:[];
   const dataBase=dataInicial?new Date(dataInicial):new Date();
@@ -496,11 +496,11 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null)
   });
 }
 
-async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atualizarFinancas=true) {
+async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atualizarFinancas=true, opcoes={}) {
   if(atualizarFinancas===false)return {ok:true,ativa:false,ignorada:true};
   if(typeof carregarIntegracaoFinancas!=='function')return {ok:true,ativa:false};
   let integracao;
-  try{integracao=await carregarIntegracaoFinancas('entrada');}
+  try{integracao=await carregarIntegracaoFinancas('entrada',opcoes);}
   catch(e){return {ok:false,message:'Não foi possível consultar o Finanças: '+(e.message||e)};}
   if(!integracao.ativa)return {ok:true,ativa:false};
   // A conta da liberacao e apenas o padrao. O usuario pode escolher outra
@@ -558,61 +558,14 @@ async function corrigirContaRecebimentoFinancas(idConta){
 }
 
 async function aplicarBaixaContaReceber(conta, valorBaixa, opcoes={}) {
-  const valor = Number(valorBaixa || 0);
-  if(!conta || !Number.isFinite(valor) || valor <= 0) return { ok:false, message:'Informe um valor de baixa maior que zero.' };
-  const recebidoAtual = contasValorRecebido(conta);
-  const saldoAtual = contasValorAberto(conta);
-  if(saldoAtual <= 0.005) return { ok:false, message:'Esta conta ja esta quitada.' };
-
-  const atualizarFinancas=opcoes.atualizar_financas!==false;
-  const financeiro=await prepararIntegracaoBaixaContaReceber(conta,opcoes.id_conta_financas,atualizarFinancas);
-  if(!financeiro.ok)return financeiro;
-
-  const aplicado = Math.min(valor, saldoAtual);
-  const novoRecebido = Number((recebidoAtual + aplicado).toFixed(2));
-  const status = contasStatusBancoPorValores(conta.valor_original, novoRecebido);
-  const dataBaixa = opcoes.data_baixa || new Date().toISOString();
-  const meio = opcoes.meio_pagamento || conta.meio_pagamento || null;
-  const obsExtra = opcoes.observacoes ? ` | Baixa: ${opcoes.observacoes}` : '';
-  const observacoes = `${conta.observacoes || ''}${obsExtra}`.trim() || null;
-
-  const res = await apiPatch(`contas_receber?id_conta=eq.${conta.id_conta}`, {
-    valor_recebido: novoRecebido,
-    status_recebimento: status,
-    data_recebimento: dataBaixa,
-    meio_pagamento: meio,
-    observacoes,
-    ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
-  },{sincronizarFinancas:false});
-  let avisoSincronizacao=null;
-  if(!res.ok){
-    const mensagem=res.data?.message||`Erro ao baixar conta ${conta.id_conta}`;
-    if(!/salva localmente/i.test(mensagem))return {ok:false,message:mensagem};
-    avisoSincronizacao=mensagem;
-  }
-  invalidarResumoContasVendas();
-
-  const baixaRegistrada = await registrarBaixaContaReceber({
-    id_conta: conta.id_conta,
-    id_cliente: conta.id_cliente,
-    valor_baixa: aplicado,
-    data_baixa: dataBaixa,
-    meio_pagamento: meio,
-    observacoes: opcoes.observacoes || null
-  });
-  if(!baixaRegistrada)return {ok:false,message:'O titulo foi atualizado, mas nao foi possivel registrar o historico da baixa.'};
-
-  const tituloAtualizado={...conta,...(res.data?.[0]||{}),valor_recebido:novoRecebido,status_recebimento:status,data_recebimento:dataBaixa,meio_pagamento:meio,observacoes};
-  if(financeiro.ativa){
-    try{
-      const idMovimento=await criarMovimentoBaixaReceberFinancas({baixa:baixaRegistrada,conta:financeiro.contaId,titulo:tituloAtualizado,integracao:financeiro.integracao});
-      if(!idMovimento)throw new Error('O Financas nao retornou o identificador do movimento.');
-      await sincronizarTituloFinanceiroAposAlteracao('contas_receber',tituloAtualizado);
-      avisoSincronizacao=null;
-    }catch(e){return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),aviso:`Baixa salva, mas nao foi possivel atualizar o Financas: ${e.message||e}`};}
-  }
-
-  return {ok:true,aplicado,sobra:Number((valor-aplicado).toFixed(2)),conta:res.data?.[0],aviso:avisoSincronizacao};
+  if(!conta)return {ok:false,message:'Conta nao encontrada.'};
+  if(!Number.isFinite(Number(valorBaixa))||Number(valorBaixa)<=0)return {ok:false,message:'Informe um valor de baixa maior que zero.'};
+  if(conta.status_recebimento==='CANCELADO'||contasValorAberto(conta)<=0.005)return {ok:false,message:'Esta conta nao esta em aberto.'};
+  try {
+    const financeiro=await prepararIntegracaoBaixaContaReceber(conta,opcoes.id_conta_financas,opcoes.atualizar_financas!==false,{criarCategoria:false});
+    if(!financeiro.ok)return financeiro;
+    return await executarBaixaReceberAtomica([conta],valorBaixa,opcoes,financeiro);
+  }catch(e){return {ok:false,message:e.message||String(e)};}
 }
 
 async function marcarContaReceberPagaRapido(idConta, event) {
@@ -673,7 +626,7 @@ async function carregarContaFinancasBaixaCliente() {
   const aviso=document.getElementById('baixa-cliente-conta-financas-aviso');
   if(!grupo||!select)return;
   try{
-    const integracao=await carregarIntegracaoFinancas('entrada');
+    const integracao=await carregarIntegracaoFinancas('entrada',{criarCategoria:false});
     if(!document.getElementById('baixa-cliente-conta-financas'))return;
     grupo.dataset.integracaoAtiva=integracao.ativa?'true':'false';
     if(!integracao.ativa){grupo.style.display='none';return;}
@@ -772,19 +725,13 @@ async function aplicarBaixaClienteContas() {
   const abertas = contasAbertasOrdenadas(items).filter(c=>Number(c.id_cliente)===idCliente);
   if(!abertas.length) { toast('Cliente sem contas em aberto.','error'); return; }
 
-  const financeiro=await prepararIntegracaoBaixaContaReceber(abertas[0],contaFinancas,atualizarFinancas);
+  const financeiro=await prepararIntegracaoBaixaContaReceber(abertas[0],contaFinancas,atualizarFinancas,{criarCategoria:false});
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
-  let totalAplicado = 0, qtd = 0;
-  for(const conta of abertas) {
-    if(restante <= 0.005) break;
-    const baixa = await aplicarBaixaContaReceber(conta, restante, { data_baixa, meio_pagamento: meio || conta.meio_pagamento, observacoes, id_conta_financas:financeiro.contaId, atualizar_financas:atualizarFinancas });
-    if(!baixa.ok) { toast(baixa.message,'error'); return; }
-    totalAplicado += baixa.aplicado;
-    restante = baixa.sobra;
-    qtd += 1;
-    if(baixa.aviso){toast(baixa.aviso,'error');await loadItems();await renderDashboardContas();return;}
-  }
+  const baixa = await executarBaixaReceberAtomica(abertas,restante,{data_baixa,meio_pagamento:meio,observacoes},financeiro);
+  if(!baixa.ok){toast(baixa.message,'error');return;}
+  const totalAplicado=baixa.aplicado, qtd=baixa.qtd;
+  restante=baixa.sobra;
 
   const sobraMsg = restante > 0.005 ? ` Sobra nao aplicada: ${contasFmtMoeda(restante)}.` : '';
   toast(`Baixado ${contasFmtMoeda(totalAplicado)} em ${qtd} conta(s).${sobraMsg}`,'success');
