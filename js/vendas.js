@@ -1414,8 +1414,8 @@ async function imprimirTicketVenda(idVenda) {
         function buildTicketCanvas(termica=false){
           const width = termica ? 384 : 900;
           const pad = termica ? 6 : 46;
-          const font = termica ? 17 : 26;
-          const step = termica ? 21 : 36;
+          const font = termica ? 22 : 26;
+          const step = termica ? 26 : 36;
           const lineStep = termica ? 20 : 30;
           const gap = termica ? 10 : 24;
           const nomeWidth = termica ? 134 : 430;
@@ -1440,11 +1440,14 @@ async function imprimirTicketVenda(idVenda) {
               ctx.font = 'bold ' + font + 'px Arial';
               ctx.textAlign = 'left';
               ctx.fillText(label,pad,cy);
+              const valueX = termica ? pad + ctx.measureText(label).width + 8 : width-pad;
+              const rowWidth = termica ? width-pad-valueX : valueWidth;
+              const rowLineStep = termica ? 26 : lineStep;
               ctx.font = font + 'px Arial';
-              ctx.textAlign = 'right';
-              const lines = wrapText(ctx,String(value || '-'),valueWidth);
-              lines.forEach((line,idx) => ctx.fillText(line,width-pad,cy+idx*lineStep,valueWidth));
-              cy += Math.max(step,lines.length*lineStep);
+              ctx.textAlign = termica ? 'left' : 'right';
+              const lines = wrapText(ctx,String(value || '-'),rowWidth);
+              lines.forEach((line,idx) => ctx.fillText(line,valueX,cy+idx*rowLineStep,rowWidth));
+              cy += Math.max(step,lines.length*rowLineStep);
             };
             row('Pedido',ticketData.codigo);
             row('Cliente',ticketData.cliente);
