@@ -1645,7 +1645,10 @@ async function imprimirTicketVenda(idVenda) {
           ];
           try{
             const device = await navigator.bluetooth.requestDevice({
-              acceptAllDevices:true,
+              filters:[
+                ...perfis.map(p => ({services:[p.service]})),
+                {namePrefix:'mini-printer'}
+              ],
               optionalServices:perfis.map(p => p.service)
             });
             const server = await device.gatt.connect();
@@ -1674,6 +1677,7 @@ async function imprimirTicketVenda(idVenda) {
             alert('Pedido enviado para a impressora.');
             try{ device.gatt.disconnect(); }catch(e){}
           }catch(e){
+            if(e.name==='NotFoundError') return;
             const abrirApps = confirm('Nao foi possivel imprimir via Bluetooth direto. Essa impressora provavelmente usa Bluetooth classico. Quer abrir o compartilhamento da imagem para escolher RawBT, Bluetooth Print ou o app da impressora?');
             if(abrirApps) await compartilharTicket(true);
           }
