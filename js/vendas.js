@@ -1531,13 +1531,16 @@ async function imprimirTicketVenda(idVenda) {
             img.alt = 'Ticket de venda';
             document.body.appendChild(img);
           }
-          img.src = buildTicketCanvas(true).toDataURL('image/png');
+          if(!img.src) img.src = buildTicketCanvas(true).toDataURL('image/png');
           return img;
         }
         window.addEventListener('beforeprint', prepararImagemImpressao);
-        async function imprimirImagem(){
-          const img = prepararImagemImpressao();
-          await img.decode();
+        window.addEventListener('DOMContentLoaded', prepararImagemImpressao);
+        function imprimirImagem(){
+          if(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1)){
+            return imprimirTermicaBluetooth();
+          }
+          prepararImagemImpressao();
           window.print();
         }
         function canvasToBlob(canvas){
