@@ -1381,7 +1381,8 @@ async function imprimirTicketVenda(idVenda) {
           .actions{position:fixed;left:0;right:0;bottom:0;margin:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));border-radius:14px 14px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,.14);}
           .actions button{min-height:50px;font-size:16px;}
         }
-        @media print{html,body{background:#fff}.ticket{box-shadow:none;border-radius:0;padding:0;max-width:360px}.actions,.hint,.no-print{display:none!important}body{padding:0;font-size:12px}.total{font-size:18px;border-width:2px;padding:8px 6px}}
+        .print-image{display:none}
+        @media print{html,body{background:#fff;margin:0;padding:0}.ticket{display:none}.print-image{display:block;width:100%;height:auto} @page{margin:0}}
       </style>
       <script>
         const ticketData = ${JSON.stringify(ticketData)};
@@ -1415,13 +1416,19 @@ async function imprimirTicketVenda(idVenda) {
           const pad = 46;
           const temp = document.createElement('canvas').getContext('2d');
           temp.font = '28px Arial';
-          let y = pad + 52 + 34 + 22 + 6 * 36 + 26 + 42;
+          let y = pad + 96 + 34 + 38;
+          [ticketData.codigo,ticketData.cliente,ticketData.venda,ticketData.entrega,ticketData.vencimento,ticketData.pagamento].forEach(value => {
+            temp.font = '26px Arial';
+            y += Math.max(36,wrapText(temp,String(value || '-'),570).length*30);
+          });
           ticketData.itens.forEach(item => {
             temp.font = '26px Arial';
             const linhas = wrapText(temp, item.nome, 430);
             y += Math.max(40, linhas.length * 30) + 14;
           });
-          y += 30 + 6 * 38 + (ticketData.observacoes ? 90 : 0) + 80;
+          temp.font = '24px Arial';
+          y += 26 + 4 * 36 + 48 + 20 + 24 + 26 + pad;
+          if(ticketData.observacoes) y += 24 + 34 + wrapText(temp,ticketData.observacoes,width-pad*2).length*30;
           const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = Math.max(1180, y);
@@ -1519,7 +1526,28 @@ async function imprimirTicketVenda(idVenda) {
           ctx.fillStyle = '#666';
           ctx.textAlign = 'center';
           ctx.fillText('Impresso em ' + ticketData.impressoEm, width/2, cy);
-          return canvas;
+          const cropped = document.createElement('canvas');
+          cropped.width = width;
+          cropped.height = cy + 26 + pad;
+          cropped.getContext('2d').drawImage(canvas,0,0);
+          return cropped;
+        }
+        function prepararImagemImpressao(){
+          let img = document.querySelector('.print-image');
+          if(!img){
+            img = document.createElement('img');
+            img.className = 'print-image';
+            img.alt = 'Ticket de venda';
+            document.body.appendChild(img);
+          }
+          img.src = buildTicketCanvas().toDataURL('image/png');
+          return img;
+        }
+        window.addEventListener('beforeprint', prepararImagemImpressao);
+        async function imprimirImagem(){
+          const img = prepararImagemImpressao();
+          await img.decode();
+          window.print();
         }
         function canvasToBlob(canvas){
           return new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
@@ -1571,89 +1599,34 @@ async function imprimirTicketVenda(idVenda) {
           return linhas.length ? linhas : [''];
         }
         function montarEscPos(){
-          const enc = new TextEncoder();
-          const out = [];
-          const add = bytes => out.push(...bytes);
-          const txt = texto => add([...enc.encode(semAcento(texto))]);
-          const largura = 48;
-          const linha = (char='-') => txt(char.repeat(largura) + '\\n');
-          const corta = (texto, tam) => semAcento(texto).slice(0, tam);
-          const esquerda = (texto, tam) => corta(texto, tam).padEnd(tam, ' ');
-          const direita = (texto, tam) => corta(texto, tam).padStart(tam, ' ');
-          const centro = texto => {
-            const limpo = corta(texto, largura);
-            const espaco = Math.max(0, largura - limpo.length);
-            return ' '.repeat(Math.floor(espaco / 2)) + limpo + '\\n';
-          };
-          const par = (label, value) => {
-            const nome = semAcento(label);
-            const valor = semAcento(value || '-');
-            const maxValor = largura - nome.length - 1;
-            const linhasValor = quebrarLinha(valor, Math.max(12, maxValor));
-            linhasValor.forEach((linhaValor, idx) => {
-              if(idx === 0){
-                txt(nome + ' '.repeat(Math.max(1, largura - nome.length - linhaValor.length)) + linhaValor + '\\n');
-              }else{
-                txt(' '.repeat(Math.max(0, largura - linhaValor.length)) + linhaValor + '\\n');
+          const source = buildTicketCanvas();
+          const canvas = document.createElement('canvas');
+          canvas.width = 384;
+          canvas.height = Math.ceil(source.height * canvas.width / source.width);
+          const ctx = canvas.getContext('2d', {willReadFrequently:true});
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+          const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          const bytesPorLinha = canvas.width / 8;
+          const out = [0x1b,0x40,0x1b,0x61,0x00];
+          // Small raster bands keep the printer's receive buffer from overflowing.
+          for(let inicio=0; inicio<canvas.height; inicio+=24){
+            const altura = Math.min(24, canvas.height-inicio);
+            out.push(0x1d,0x76,0x30,0x00,bytesPorLinha,0x00,altura,0x00);
+            for(let y=inicio; y<inicio+altura; y++){
+              for(let x=0; x<canvas.width; x+=8){
+                let byte = 0;
+                for(let bit=0; bit<8; bit++){
+                  const i = (y*canvas.width+x+bit)*4;
+                  const luminancia = pixels[i]*0.299 + pixels[i+1]*0.587 + pixels[i+2]*0.114;
+                  if(luminancia<180) byte |= 0x80 >> bit;
+                }
+                out.push(byte);
               }
-            });
-          };
-          const produto = item => {
-            const nomeW = 22, qtdW = 5, unitW = 9, totalW = 12;
-            const linhasNome = quebrarLinha(item.nome, nomeW);
-            linhasNome.forEach((linhaNome, idx) => {
-              if(idx === 0){
-                txt(
-                  esquerda(linhaNome, nomeW) +
-                  direita(String(item.qtd), qtdW) +
-                  direita(item.preco.replace('R$ ', ''), unitW) +
-                  direita(item.total.replace('R$ ', ''), totalW) +
-                  '\\n'
-                );
-              }else{
-                txt(esquerda(linhaNome, nomeW) + ' '.repeat(qtdW + unitW + totalW) + '\\n');
-              }
-            });
-          };
-          add([0x1b,0x40]);
-          add([0x1b,0x61,0x01]);
-          add([0x1b,0x45,0x01]);
-          txt(centro(ticketData.empresa));
-          add([0x1b,0x45,0x00]);
-          txt(centro(ticketData.titulo));
-          add([0x1b,0x61,0x00]);
-          linha();
-          par('Pedido', ticketData.codigo);
-          par('Cliente', ticketData.cliente);
-          par('Venda', ticketData.venda);
-          par('Entrega', ticketData.entrega);
-          par('Vencimento', ticketData.vencimento);
-          par('Pagamento', ticketData.pagamento);
-          linha();
-          txt(esquerda('Produto', 22) + direita('Qtd', 5) + direita('Unit.', 9) + direita('Total', 12) + '\\n');
-          ticketData.itens.forEach(produto);
-          linha();
-          par('Subtotal', ticketData.subtotal);
-          par('Desc. itens', ticketData.descontoItens);
-          par('Desc. pedido', ticketData.descontoPedido);
-          par('Desc. total', ticketData.desconto);
-          linha('=');
-          add([0x1b,0x45,0x01]);
-          add([0x1d,0x21,0x11]);
-          txt('Total ' + ticketData.total + '\\n');
-          add([0x1d,0x21,0x00]);
-          add([0x1b,0x45,0x00]);
-          linha('=');
-          if(ticketData.observacoes){
-            linha();
-            txt('Observacoes\\n');
-            quebrarLinha(ticketData.observacoes, largura).forEach(l => txt(l + '\\n'));
+            }
           }
-          linha();
-          add([0x1b,0x61,0x01]);
-          txt(centro('Impresso em ' + ticketData.impressoEm));
-          txt('\\n\\n');
-          add([0x1d,0x56,0x42,0x00]);
+          out.push(0x1b,0x64,0x03,0x1d,0x56,0x42,0x00);
           return new Uint8Array(out);
         }
         async function escreverEmChunks(characteristic, bytes){
@@ -1737,7 +1710,7 @@ async function imprimirTicketVenda(idVenda) {
         <div class="sep"></div>
         <div class="sub">Impresso em ${new Date().toLocaleString('pt-BR')}</div>
         <div class="actions no-print">
-          <button class="primary" onclick="window.print()">Imprimir</button>
+          <button class="primary" onclick="imprimirImagem()">Imprimir</button>
           <button onclick="compartilharTicket()">Compartilhar imagem</button>
           <button onclick="imprimirTermicaBluetooth()">Térmica direta / App</button>
           <button class="whats" onclick="enviarWhatsApp()">WhatsApp / Apps</button>
