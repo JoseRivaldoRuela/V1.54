@@ -1411,126 +1411,114 @@ async function imprimirTicketVenda(idVenda) {
           ctx.stroke();
           ctx.setLineDash([]);
         }
-        function buildTicketCanvas(){
-          const width = 900;
-          const pad = 46;
-          const temp = document.createElement('canvas').getContext('2d');
-          temp.font = '28px Arial';
-          let y = pad + 96 + 34 + 38;
-          [ticketData.codigo,ticketData.cliente,ticketData.venda,ticketData.entrega,ticketData.vencimento,ticketData.pagamento].forEach(value => {
-            temp.font = '26px Arial';
-            y += Math.max(36,wrapText(temp,String(value || '-'),570).length*30);
-          });
-          ticketData.itens.forEach(item => {
-            temp.font = '26px Arial';
-            const linhas = wrapText(temp, item.nome, 430);
-            y += Math.max(40, linhas.length * 30) + 14;
-          });
-          temp.font = '24px Arial';
-          y += 26 + 4 * 36 + 48 + 20 + 24 + 26 + pad;
-          if(ticketData.observacoes) y += 24 + 34 + wrapText(temp,ticketData.observacoes,width-pad*2).length*30;
+        function buildTicketCanvas(termica=false){
+          const width = termica ? 384 : 900;
+          const pad = termica ? 6 : 46;
+          const font = termica ? 17 : 26;
+          const step = termica ? 21 : 36;
+          const lineStep = termica ? 20 : 30;
+          const gap = termica ? 10 : 24;
+          const nomeWidth = termica ? 134 : 430;
+          const qtdX = termica ? 174 : 560;
+          const unitX = termica ? 258 : 710;
+          const valueWidth = termica ? 264 : 570;
           const canvas = document.createElement('canvas');
           canvas.width = width;
-          canvas.height = Math.max(1180, y);
+          canvas.height = 1;
+          const render = ctx => {
+            ctx.fillStyle = '#111';
+            ctx.textBaseline = 'top';
+            let cy = pad;
+            ctx.font = 'bold ' + (termica ? 23 : 42) + 'px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(ticketData.empresa, width/2, cy, width-pad*2);
+            cy += termica ? 27 : 52;
+            ctx.font = (termica ? 16 : 26) + 'px Arial';
+            ctx.fillText(ticketData.titulo, width/2, cy);
+            cy += termica ? 23 : 44;
+            const row = (label,value) => {
+              ctx.font = 'bold ' + font + 'px Arial';
+              ctx.textAlign = 'left';
+              ctx.fillText(label,pad,cy);
+              ctx.font = font + 'px Arial';
+              ctx.textAlign = 'right';
+              const lines = wrapText(ctx,String(value || '-'),valueWidth);
+              lines.forEach((line,idx) => ctx.fillText(line,width-pad,cy+idx*lineStep,valueWidth));
+              cy += Math.max(step,lines.length*lineStep);
+            };
+            row('Pedido',ticketData.codigo);
+            row('Cliente',ticketData.cliente);
+            row('Venda',ticketData.venda);
+            row('Entrega',ticketData.entrega);
+            row('Vencimento',ticketData.vencimento);
+            row('Pagamento',ticketData.pagamento);
+            cy += termica ? 4 : 10;
+            drawLine(ctx,pad,width-pad,cy);
+            cy += gap;
+            ctx.font = 'bold ' + (termica ? 16 : 24) + 'px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText('Produto',pad,cy);
+            ctx.textAlign = 'center';
+            ctx.fillText('Qtd',qtdX,cy);
+            ctx.textAlign = 'right';
+            ctx.fillText('Unit.',unitX,cy);
+            ctx.fillText('Total',width-pad,cy);
+            cy += termica ? 23 : 38;
+            ticketData.itens.forEach(item => {
+              ctx.font = (termica ? 16 : 26) + 'px Arial';
+              const lines = wrapText(ctx,item.nome,nomeWidth);
+              ctx.textAlign = 'left';
+              lines.forEach((line,idx) => ctx.fillText(line,pad,cy+idx*lineStep,nomeWidth));
+              ctx.textAlign = 'center';
+              ctx.fillText(String(item.qtd),qtdX,cy,termica ? 38 : 70);
+              ctx.textAlign = 'right';
+              ctx.fillText(termica ? item.preco.replace('R$ ', '') : item.preco,unitX,cy,termica ? 62 : 130);
+              ctx.fillText(item.total,width-pad,cy,termica ? 112 : 138);
+              cy += Math.max(termica ? 22 : 40,lines.length*lineStep) + (termica ? 5 : 14);
+            });
+            drawLine(ctx,pad,width-pad,cy);
+            cy += termica ? 10 : 26;
+            row('Subtotal',ticketData.subtotal);
+            row('Desc. itens',ticketData.descontoItens);
+            row('Desc. pedido',ticketData.descontoPedido);
+            row('Desc. total',ticketData.desconto);
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = termica ? 2 : 3;
+            ctx.strokeRect(pad,cy-(termica ? 2 : 10),width-pad*2,termica ? 31 : 56);
+            ctx.font = 'bold ' + (termica ? 23 : 40) + 'px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText('Total',pad+2,cy);
+            ctx.textAlign = 'right';
+            ctx.fillText(ticketData.total,width-pad-2,cy,width-pad*2-(termica ? 72 : 120));
+            cy += termica ? 35 : 48;
+            if(ticketData.observacoes){
+              drawLine(ctx,pad,width-pad,cy);
+              cy += gap;
+              ctx.font = 'bold ' + (termica ? 17 : 25) + 'px Arial';
+              ctx.textAlign = 'left';
+              ctx.fillText('Observacoes',pad,cy);
+              cy += termica ? 22 : 34;
+              ctx.font = (termica ? 17 : 24) + 'px Arial';
+              wrapText(ctx,ticketData.observacoes,width-pad*2).forEach(line => {
+                ctx.fillText(line,pad,cy,width-pad*2);
+                cy += lineStep;
+              });
+            }
+            cy += termica ? 6 : 20;
+            drawLine(ctx,pad,width-pad,cy);
+            cy += gap;
+            ctx.font = (termica ? 14 : 22) + 'px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Impresso em ' + ticketData.impressoEm,width/2,cy,width-pad*2);
+            return cy + (termica ? 17 : 26) + pad;
+          };
+          // Measure with the same layout before allocating the full image.
+          canvas.height = Math.ceil(render(canvas.getContext('2d')));
           const ctx = canvas.getContext('2d');
           ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = '#111';
-          ctx.textBaseline = 'top';
-          let cy = pad;
-          ctx.font = 'bold 42px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText(ticketData.empresa, width/2, cy);
-          cy += 52;
-          ctx.font = '26px Arial';
-          ctx.fillStyle = '#555';
-          ctx.fillText(ticketData.titulo, width/2, cy);
-          cy += 44;
-          ctx.textAlign = 'left';
-          ctx.fillStyle = '#111';
-          ctx.font = '26px Arial';
-          const row = (label, value) => {
-            ctx.font = 'bold 26px Arial';
-            ctx.textAlign = 'left';
-            ctx.fillText(label, pad, cy);
-            ctx.font = '26px Arial';
-            ctx.textAlign = 'right';
-            const linhasValor=wrapText(ctx,String(value || '-'),570);
-            linhasValor.forEach((linha,idx)=>ctx.fillText(linha,width-pad,cy+idx*30));
-            cy += Math.max(36,linhasValor.length*30);
-          };
-          row('Pedido', ticketData.codigo);
-          row('Cliente', ticketData.cliente);
-          row('Venda', ticketData.venda);
-          row('Entrega', ticketData.entrega);
-          row('Vencimento', ticketData.vencimento);
-          row('Pagamento', ticketData.pagamento);
-          cy += 10;
-          drawLine(ctx, pad, width-pad, cy);
-          cy += 24;
-          ctx.fillStyle = '#111';
-          ctx.font = 'bold 24px Arial';
-          ctx.textAlign = 'left';
-          ctx.fillText('Produto', pad, cy);
-          ctx.textAlign = 'center';
-          ctx.fillText('Qtd', 560, cy);
-          ctx.textAlign = 'right';
-          ctx.fillText('Unit.', 710, cy);
-          ctx.fillText('Total', width-pad, cy);
-          cy += 38;
-          ticketData.itens.forEach(item => {
-            ctx.font = '26px Arial';
-            ctx.fillStyle = '#111';
-            const linhas = wrapText(ctx, item.nome, 430);
-            ctx.textAlign = 'left';
-            linhas.forEach((linha, idx) => ctx.fillText(linha, pad, cy + idx * 30));
-            ctx.textAlign = 'center';
-            ctx.fillText(String(item.qtd), 560, cy);
-            ctx.textAlign = 'right';
-            ctx.fillText(item.preco, 710, cy);
-            ctx.fillText(item.total, width-pad, cy);
-            cy += Math.max(40, linhas.length * 30) + 14;
-          });
-          drawLine(ctx, pad, width-pad, cy);
-          cy += 26;
-          row('Subtotal', ticketData.subtotal);
-          row('Desc. itens', ticketData.descontoItens);
-          row('Desc. pedido', ticketData.descontoPedido);
-          row('Desc. total', ticketData.desconto);
-          ctx.strokeStyle = '#111';
-          ctx.lineWidth = 3;
-          ctx.strokeRect(pad, cy - 10, width - pad * 2, 56);
-          ctx.font = 'bold 40px Arial';
-          ctx.textAlign = 'left';
-          ctx.fillText('Total', pad, cy);
-          ctx.textAlign = 'right';
-          ctx.fillText(ticketData.total, width-pad, cy);
-          cy += 48;
-          if(ticketData.observacoes){
-            drawLine(ctx, pad, width-pad, cy);
-            cy += 24;
-            ctx.font = 'bold 25px Arial';
-            ctx.textAlign = 'left';
-            ctx.fillText('Observacoes', pad, cy);
-            cy += 34;
-            ctx.font = '24px Arial';
-            wrapText(ctx, ticketData.observacoes, width - pad * 2).forEach(linha => {
-              ctx.fillText(linha, pad, cy);
-              cy += 30;
-            });
-          }
-          cy += 20;
-          drawLine(ctx, pad, width-pad, cy);
-          cy += 24;
-          ctx.font = '22px Arial';
-          ctx.fillStyle = '#666';
-          ctx.textAlign = 'center';
-          ctx.fillText('Impresso em ' + ticketData.impressoEm, width/2, cy);
-          const cropped = document.createElement('canvas');
-          cropped.width = width;
-          cropped.height = cy + 26 + pad;
-          cropped.getContext('2d').drawImage(canvas,0,0);
-          return cropped;
+          ctx.fillRect(0,0,canvas.width,canvas.height);
+          render(ctx);
+          return canvas;
         }
         function prepararImagemImpressao(){
           let img = document.querySelector('.print-image');
@@ -1540,7 +1528,7 @@ async function imprimirTicketVenda(idVenda) {
             img.alt = 'Ticket de venda';
             document.body.appendChild(img);
           }
-          img.src = buildTicketCanvas().toDataURL('image/png');
+          img.src = buildTicketCanvas(true).toDataURL('image/png');
           return img;
         }
         window.addEventListener('beforeprint', prepararImagemImpressao);
@@ -1599,7 +1587,7 @@ async function imprimirTicketVenda(idVenda) {
           return linhas.length ? linhas : [''];
         }
         function montarEscPos(){
-          const source = buildTicketCanvas();
+          const source = buildTicketCanvas(true);
           const canvas = document.createElement('canvas');
           canvas.width = 384;
           canvas.height = Math.ceil(source.height * canvas.width / source.width);
