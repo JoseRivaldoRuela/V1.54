@@ -1540,13 +1540,13 @@ async function imprimirTicketVenda(idVenda) {
         function canvasToBlob(canvas){
           return new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
         }
-        async function gerarArquivoTicket(){
-          const canvas = buildTicketCanvas();
+        async function gerarArquivoTicket(termica=false){
+          const canvas = buildTicketCanvas(termica);
           const blob = await canvasToBlob(canvas);
           return new File([blob], 'pedido-' + String(ticketData.codigo).replace(/[^a-z0-9_-]/gi,'-') + '.png', {type:'image/png'});
         }
-        async function compartilharTicket(){
-          const file = await gerarArquivoTicket();
+        async function compartilharTicket(termica=false){
+          const file = await gerarArquivoTicket(termica);
           if(navigator.canShare && navigator.canShare({files:[file]})){
             try{
               await navigator.share({title:'Pedido ' + ticketData.codigo, files:[file]});
@@ -1629,6 +1629,7 @@ async function imprimirTicketVenda(idVenda) {
         async function imprimirTermicaBluetooth(){
           if(!navigator.bluetooth){
             alert('Este navegador nao permite impressao Bluetooth direta. Use Chrome no Android ou compartilhe a imagem do pedido.');
+            await compartilharTicket(true);
             return;
           }
           const perfis = [
@@ -1668,7 +1669,7 @@ async function imprimirTicketVenda(idVenda) {
             try{ device.gatt.disconnect(); }catch(e){}
           }catch(e){
             const abrirApps = confirm('Nao foi possivel imprimir via Bluetooth direto. Essa impressora provavelmente usa Bluetooth classico. Quer abrir o compartilhamento da imagem para escolher RawBT, Bluetooth Print ou o app da impressora?');
-            if(abrirApps) await compartilharTicket();
+            if(abrirApps) await compartilharTicket(true);
           }
         }
       </script>
