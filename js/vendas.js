@@ -1265,7 +1265,10 @@ async function imprimirTicketVenda(idVenda) {
   const venda = items.find(v=>Number(v.id_venda)===Number(idVenda));
   if(!venda){ toast('Venda não encontrada para impressão.','error'); return; }
 
-  const itensBanco=itensVenda.length?null:await apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`);
+  const [itensBanco,contasBanco]=await Promise.all([
+    itensVenda.length?Promise.resolve(null):apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`),
+    apiGet(`contas_receber?select=data_vencimento,numero_parcela,total_parcelas&id_venda=eq.${idVenda}&order=numero_parcela.asc,data_vencimento.asc`)
+  ]);
   const itens=itensVenda.length?itensVenda:(Array.isArray(itensBanco)?itensBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensBanco);
   if(!Array.isArray(itens) || !itens.length){ toast('Venda sem itens para impressão.','error'); return; }
 
@@ -1278,6 +1281,14 @@ async function imprimirTicketVenda(idVenda) {
   const valorFinalBanco = Number(venda.valor_final);
   const total = Number.isFinite(valorFinalBanco) ? valorFinalBanco : Math.max(0,subtotal-desconto);
   const statusFin = venda.status_entrega === 'ENTREGUE' ? 'A RECEBER' : 'Pendente';
+  const fmtDataTicket = valor => {
+    const data=String(valor||'').slice(0,10),partes=data.split('-');
+    return partes.length===3?`${partes[2]}/${partes[1]}/${partes[0]}`:'-';
+  };
+  const contasTicket=Array.isArray(contasBanco)?contasBanco.filter(c=>c.data_vencimento):[];
+  const vencimento=contasTicket.length
+    ? contasTicket.map((c,idx)=>contasTicket.length>1?`${Number(c.numero_parcela||idx+1)}/${Number(c.total_parcelas||contasTicket.length)} ${fmtDataTicket(c.data_vencimento)}`:fmtDataTicket(c.data_vencimento)).join(' | ')
+    : fmtDataTicket(venda.data_vencimento);
   const itensTexto = itens.map(i => {
     const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
     const qtd = Number(i.quantidade||0);
@@ -1291,6 +1302,7 @@ async function imprimirTicketVenda(idVenda) {
     `Cliente: ${cliente}`,
     `Venda: ${venda.data_venda?new Date(venda.data_venda).toLocaleString('pt-BR'):'-'}`,
     `Entrega: ${venda.data_entrega?new Date(venda.data_entrega).toLocaleString('pt-BR'):'Pendente'}`,
+    `Vencimento: ${vencimento}`,
     `Pagamento: ${venda.meio_pagamento||'-'} - ${statusFin}`,
     '',
     'Itens:',
@@ -1310,6 +1322,7 @@ async function imprimirTicketVenda(idVenda) {
     cliente,
     venda: venda.data_venda ? new Date(venda.data_venda).toLocaleString('pt-BR') : '-',
     entrega: venda.data_entrega ? new Date(venda.data_entrega).toLocaleString('pt-BR') : 'Pendente',
+    vencimento,
     pagamento: `${venda.meio_pagamento||'-'} - ${statusFin}`,
     subtotal: fmt(subtotal),
     descontoItens: fmt(descontoItens),
@@ -1354,7 +1367,7 @@ async function imprimirTicketVenda(idVenda) {
         th:first-child,td:first-child{padding-right:8px;}
         th:nth-child(2),td:nth-child(2){text-align:center;}
         th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4){text-align:right;}
-        .total{font-size:18px;font-weight:700;}
+        .total{font-size:22px;font-weight:900;border:2px solid #111;padding:10px 8px;margin-top:10px;}
         .obs{white-space:pre-wrap;margin-top:6px;color:#333;}
         .actions{position:sticky;bottom:0;display:grid;grid-template-columns:1fr;gap:10px;margin:16px -16px -18px;padding:12px 16px;background:rgba(255,255,255,.96);border-top:1px solid #ddd;border-radius:0 0 10px 10px;}
         .actions button{width:100%;min-height:48px;padding:12px;border:1px solid #ccc;border-radius:8px;background:#f7f7f7;color:#111;font-size:15px;font-weight:700;cursor:pointer;}
@@ -1368,7 +1381,7 @@ async function imprimirTicketVenda(idVenda) {
           .actions{position:fixed;left:0;right:0;bottom:0;margin:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));border-radius:14px 14px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,.14);}
           .actions button{min-height:50px;font-size:16px;}
         }
-        @media print{html,body{background:#fff}.ticket{box-shadow:none;border-radius:0;padding:0;max-width:360px}.actions,.hint,.no-print{display:none!important}body{padding:0;font-size:12px}.total{font-size:15px}}
+        @media print{html,body{background:#fff}.ticket{box-shadow:none;border-radius:0;padding:0;max-width:360px}.actions,.hint,.no-print{display:none!important}body{padding:0;font-size:12px}.total{font-size:18px;border-width:2px;padding:8px 6px}}
       </style>
       <script>
         const ticketData = ${JSON.stringify(ticketData)};
@@ -1402,7 +1415,7 @@ async function imprimirTicketVenda(idVenda) {
           const pad = 46;
           const temp = document.createElement('canvas').getContext('2d');
           temp.font = '28px Arial';
-          let y = pad + 52 + 34 + 22 + 5 * 36 + 26 + 42;
+          let y = pad + 52 + 34 + 22 + 6 * 36 + 26 + 42;
           ticketData.itens.forEach(item => {
             temp.font = '26px Arial';
             const linhas = wrapText(temp, item.nome, 430);
@@ -1435,13 +1448,15 @@ async function imprimirTicketVenda(idVenda) {
             ctx.fillText(label, pad, cy);
             ctx.font = '26px Arial';
             ctx.textAlign = 'right';
-            ctx.fillText(String(value || '-'), width - pad, cy);
-            cy += 36;
+            const linhasValor=wrapText(ctx,String(value || '-'),570);
+            linhasValor.forEach((linha,idx)=>ctx.fillText(linha,width-pad,cy+idx*30));
+            cy += Math.max(36,linhasValor.length*30);
           };
           row('Pedido', ticketData.codigo);
           row('Cliente', ticketData.cliente);
           row('Venda', ticketData.venda);
           row('Entrega', ticketData.entrega);
+          row('Vencimento', ticketData.vencimento);
           row('Pagamento', ticketData.pagamento);
           cy += 10;
           drawLine(ctx, pad, width-pad, cy);
@@ -1475,7 +1490,10 @@ async function imprimirTicketVenda(idVenda) {
           row('Desc. itens', ticketData.descontoItens);
           row('Desc. pedido', ticketData.descontoPedido);
           row('Desc. total', ticketData.desconto);
-          ctx.font = 'bold 34px Arial';
+          ctx.strokeStyle = '#111';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(pad, cy - 10, width - pad * 2, 56);
+          ctx.font = 'bold 40px Arial';
           ctx.textAlign = 'left';
           ctx.fillText('Total', pad, cy);
           ctx.textAlign = 'right';
@@ -1557,42 +1575,84 @@ async function imprimirTicketVenda(idVenda) {
           const out = [];
           const add = bytes => out.push(...bytes);
           const txt = texto => add([...enc.encode(semAcento(texto))]);
-          const linha = () => txt('--------------------------------\\n');
+          const largura = 48;
+          const linha = (char='-') => txt(char.repeat(largura) + '\\n');
+          const corta = (texto, tam) => semAcento(texto).slice(0, tam);
+          const esquerda = (texto, tam) => corta(texto, tam).padEnd(tam, ' ');
+          const direita = (texto, tam) => corta(texto, tam).padStart(tam, ' ');
+          const centro = texto => {
+            const limpo = corta(texto, largura);
+            const espaco = Math.max(0, largura - limpo.length);
+            return ' '.repeat(Math.floor(espaco / 2)) + limpo + '\\n';
+          };
+          const par = (label, value) => {
+            const nome = semAcento(label);
+            const valor = semAcento(value || '-');
+            const maxValor = largura - nome.length - 1;
+            const linhasValor = quebrarLinha(valor, Math.max(12, maxValor));
+            linhasValor.forEach((linhaValor, idx) => {
+              if(idx === 0){
+                txt(nome + ' '.repeat(Math.max(1, largura - nome.length - linhaValor.length)) + linhaValor + '\\n');
+              }else{
+                txt(' '.repeat(Math.max(0, largura - linhaValor.length)) + linhaValor + '\\n');
+              }
+            });
+          };
+          const produto = item => {
+            const nomeW = 22, qtdW = 5, unitW = 9, totalW = 12;
+            const linhasNome = quebrarLinha(item.nome, nomeW);
+            linhasNome.forEach((linhaNome, idx) => {
+              if(idx === 0){
+                txt(
+                  esquerda(linhaNome, nomeW) +
+                  direita(String(item.qtd), qtdW) +
+                  direita(item.preco.replace('R$ ', ''), unitW) +
+                  direita(item.total.replace('R$ ', ''), totalW) +
+                  '\\n'
+                );
+              }else{
+                txt(esquerda(linhaNome, nomeW) + ' '.repeat(qtdW + unitW + totalW) + '\\n');
+              }
+            });
+          };
           add([0x1b,0x40]);
           add([0x1b,0x61,0x01]);
           add([0x1b,0x45,0x01]);
-          txt(ticketData.empresa + '\\n');
+          txt(centro(ticketData.empresa));
           add([0x1b,0x45,0x00]);
-          txt(ticketData.titulo + '\\n');
+          txt(centro(ticketData.titulo));
           add([0x1b,0x61,0x00]);
           linha();
-          txt('Pedido: ' + ticketData.codigo + '\\n');
-          txt('Cliente: ' + ticketData.cliente + '\\n');
-          txt('Venda: ' + ticketData.venda + '\\n');
-          txt('Entrega: ' + ticketData.entrega + '\\n');
-          txt('Pagamento: ' + ticketData.pagamento + '\\n');
+          par('Pedido', ticketData.codigo);
+          par('Cliente', ticketData.cliente);
+          par('Venda', ticketData.venda);
+          par('Entrega', ticketData.entrega);
+          par('Vencimento', ticketData.vencimento);
+          par('Pagamento', ticketData.pagamento);
           linha();
-          ticketData.itens.forEach(item => {
-            quebrarLinha(item.nome, 32).forEach(l => txt(l + '\\n'));
-            const qtd = String(item.qtd).padStart(4, ' ');
-            const total = String(item.total).padStart(12, ' ');
-            txt(qtd + ' x ' + item.preco + total + '\\n');
-          });
+          txt(esquerda('Produto', 22) + direita('Qtd', 5) + direita('Unit.', 9) + direita('Total', 12) + '\\n');
+          ticketData.itens.forEach(produto);
           linha();
-          txt('Subtotal: ' + ticketData.subtotal + '\\n');
-          txt('Desc. itens: ' + ticketData.descontoItens + '\\n');
-          txt('Desc. pedido: ' + ticketData.descontoPedido + '\\n');
-          txt('Desc. total: ' + ticketData.desconto + '\\n');
+          par('Subtotal', ticketData.subtotal);
+          par('Desc. itens', ticketData.descontoItens);
+          par('Desc. pedido', ticketData.descontoPedido);
+          par('Desc. total', ticketData.desconto);
+          linha('=');
           add([0x1b,0x45,0x01]);
-          txt('Total: ' + ticketData.total + '\\n');
+          add([0x1d,0x21,0x11]);
+          txt('Total ' + ticketData.total + '\\n');
+          add([0x1d,0x21,0x00]);
           add([0x1b,0x45,0x00]);
+          linha('=');
           if(ticketData.observacoes){
             linha();
-            quebrarLinha('Obs: ' + ticketData.observacoes, 32).forEach(l => txt(l + '\\n'));
+            txt('Observacoes\\n');
+            quebrarLinha(ticketData.observacoes, largura).forEach(l => txt(l + '\\n'));
           }
           linha();
           add([0x1b,0x61,0x01]);
-          txt('Impresso em\\n' + ticketData.impressoEm + '\\n\\n\\n');
+          txt(centro('Impresso em ' + ticketData.impressoEm));
+          txt('\\n\\n');
           add([0x1d,0x56,0x42,0x00]);
           return new Uint8Array(out);
         }
@@ -1660,6 +1720,7 @@ async function imprimirTicketVenda(idVenda) {
         <div class="row"><strong>Cliente</strong><span>${cliente}</span></div>
         <div class="row"><strong>Venda</strong><span>${venda.data_venda?new Date(venda.data_venda).toLocaleString('pt-BR'):'-'}</span></div>
         <div class="row"><strong>Entrega</strong><span>${venda.data_entrega?new Date(venda.data_entrega).toLocaleString('pt-BR'):'Pendente'}</span></div>
+        <div class="row"><strong>Vencimento</strong><span>${vencimento}</span></div>
         <div class="row"><strong>Pagamento</strong><span>${venda.meio_pagamento||'-'} · ${statusFin}</span></div>
         <div class="sep"></div>
         <table>
