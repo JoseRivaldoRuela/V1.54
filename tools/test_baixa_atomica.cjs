@@ -20,7 +20,8 @@ async function testDatabase() {
       tipo text,cor text,descricao text,ativo boolean);
     create table financas.movimentos(id_movimento bigserial primary key,id_empresa uuid,id_conta bigint,
       id_conta_destino bigint,tipo text,valor numeric,descricao text,data_movimento date,data_vencimento date,
-      data_efetivacao date,id_categoria bigint,status text,documento text,observacoes text);
+      data_efetivacao date,id_categoria bigint,status text,documento text,observacoes text,
+      id_fatura bigint,id_fatura_pagamento bigint);
     create function public.app_empresa_atual() returns uuid language sql as
       $$select '9bd65462-b979-4618-bb9d-851ef003d234'::uuid$$;
     create function public.app_usuario_atual() returns bigint language sql as $$select 1::bigint$$;
@@ -45,7 +46,7 @@ async function testDatabase() {
         data_efetivacao,id_categoria,status,documento,observacoes)
         values(public.app_empresa_atual(),p_id_conta,p_tipo,p_valor,p_descricao,p_data_movimento,p_data_vencimento,
           p_data_efetivacao,p_id_categoria,p_status,p_documento,p_observacoes) returning id_movimento into resultado;
-      update financas.contas set saldo_atual=saldo_atual+p_valor where id_conta=p_id_conta;
+      if p_status='efetivado' then update financas.contas set saldo_atual=saldo_atual+p_valor where id_conta=p_id_conta;end if;
       if current_setting('test.failure',true)='create' or
          (current_setting('test.failure',true)='second' and p_valor=100) then
         raise exception 'simulated finance failure';end if;
@@ -58,9 +59,12 @@ async function testDatabase() {
       if anterior.status='efetivado' then
         update financas.contas set saldo_atual=saldo_atual-anterior.valor where id_conta=anterior.id_conta;end if;
       update financas.movimentos set id_conta=p_id_conta,valor=p_valor,status=p_status,
-        data_efetivacao=p_data_efetivacao where id_movimento=p_id_movimento;
+        documento=p_documento,descricao=p_descricao,data_movimento=p_data_movimento,
+        data_vencimento=p_data_vencimento,data_efetivacao=p_data_efetivacao where id_movimento=p_id_movimento;
       if p_status='efetivado' then update financas.contas set saldo_atual=saldo_atual+p_valor where id_conta=p_id_conta;end if;
-      if current_setting('test.failure',true)='sync' then raise exception 'simulated sync failure';end if;
+      if current_setting('test.failure',true)='sync' or
+         (current_setting('test.failure',true)='second' and p_valor=100) then
+        raise exception 'simulated sync failure';end if;
       end$$;
     insert into public.empresas values(public.app_empresa_atual(),true);
     insert into financas.contas values(1,public.app_empresa_atual(),true,'banco',0),
@@ -104,7 +108,7 @@ async function testDatabase() {
   assert.equal(await snapshot(),before);
   await db.exec("update financas.movimentos set status='efetivado' where id_movimento=101");
   const divergent=await snapshot();
-  await assert.rejects(call([item(1,10)]),/ja tem movimento efetivado/);
+  await assert.rejects(call([item(1,10)]),/Recebimentos anteriores divergentes/);
   assert.equal(await snapshot(),divergent);
   await db.exec("update financas.movimentos set status='pendente' where id_movimento=101");
   const id=uuid();
@@ -120,6 +124,8 @@ async function testDatabase() {
   const titles=await db.query("select count(*) as n from public.contas_receber where status_recebimento='RECEBIDO'");
   assert.equal(Number(titles.rows[0].n),2);
   assert.equal((await db.query('select count(*) as n from public.contas_receber_baixas')).rows[0].n,2);
+  assert.equal((await db.query("select count(*) as n from financas.movimentos where status='cancelado'")).rows[0].n,0);
+  assert.deepEqual((await db.query('select id_movimento_financas from public.contas_receber order by id_conta')).rows.map(r=>r.id_movimento_financas),[101,102]);
   await db.exec(`
     insert into public.contas_receber(id_conta,empresa_id,id_usuario,id_cliente,valor_original,valor_recebido,
       status_recebimento,id_movimento_financas,id_conta_financas,data_vencimento)

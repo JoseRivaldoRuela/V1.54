@@ -256,7 +256,7 @@ function cardVenda(c, resumoContas={}) {
   return `<div class="item-card ${currentId===c.id_venda?'active':''}" onclick="openItem(${c.id_venda})">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
       <span style="font-size:13px;font-weight:500;font-family:var(--mono);color:var(--accent);">${c.codigo_venda||'#'+c.id_venda}</span>
-      <span class="pill ${statusColor}" style="font-size:9px;padding:1px 6px;">${slabel}</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span class="pill ${statusColor}" style="font-size:9px;padding:1px 6px;">${slabel}</span>${botaoAcoesVenda(c)}</span>
     </div>
     <div style="font-size:12px;color:${nomeColor};margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;">
       ${valorPrefix}
@@ -866,6 +866,10 @@ async function finalizarCadastroNovo() {
   isNew=false;
   await loadItems();
   await cancelForm();
+  if(currentTab==='vendas'&&window.matchMedia('(max-width:768px)').matches){
+    document.getElementById('sidebar')?.classList.add('open');
+    document.getElementById('sidebar-overlay')?.classList.add('open');
+  }
 }
 
 // =====================

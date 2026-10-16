@@ -639,9 +639,10 @@ function mostrarDetalheVendas(vendas, titulo) {
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Data</th>
           <th style="padding:10px 14px;text-align:center;font-size:11px;color:var(--text2);font-weight:500;">Status</th>
           <th style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text2);font-weight:500;">Valor</th>
+          <th style="padding:10px 8px;width:40px;" aria-label="Ações"></th>
         </tr></thead>
         <tbody>
-          ${vendas.length === 0 ? '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma venda encontrada</td></tr>' :
+          ${vendas.length === 0 ? '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text3);">Nenhuma venda encontrada</td></tr>' :
           vendas.map(v=>`<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="openItem(${v.id_venda})" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
             <td style="padding:10px 14px;font-weight:500;color:var(--accent);font-family:var(--mono);">${v.codigo_venda||'#'+v.id_venda}</td>
             <td style="padding:10px 14px;color:var(--text);">${v.clientes?.nome_fantasia||v.clientes?.razao_social||'-'}</td>
@@ -650,11 +651,13 @@ function mostrarDetalheVendas(vendas, titulo) {
               <span class="pill ${v.status_entrega==='ENTREGUE'?'on':v.status_entrega==='CANCELADO'?'off':'warn'}">${v.status_entrega==='ENTREGUE'?'Entregue':v.status_entrega==='CANCELADO'?'Cancelado':'Pendente'}</span>
             </td>
             <td style="padding:10px 14px;text-align:right;font-weight:600;color:var(--accent);font-family:var(--mono);">${fmt(v.valor_final||0)}</td>
+            <td style="padding:10px 8px;">${botaoAcoesVenda(v)}</td>
           </tr>`).join('')}
         </tbody>
         <tfoot><tr style="border-top:2px solid var(--border);background:var(--surface2);">
           <td colspan="4" style="padding:10px 14px;font-weight:600;font-size:13px;">Total</td>
           <td style="padding:10px 14px;text-align:right;font-weight:700;color:var(--accent);font-family:var(--mono);">${fmt(total)}</td>
+          <td></td>
         </tr></tfoot>
       </table>
     </div>`;
@@ -1261,16 +1264,76 @@ function calcTotais() {
   }
 }
 
-async function imprimirTicketVenda(idVenda) {
+function botaoAcoesVenda(venda) {
+  return `<button type="button" aria-label="Ações da venda ${Number(venda.id_venda)}" aria-haspopup="menu" onclick="abrirAcoesVenda(event,${Number(venda.id_venda)})" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;min-width:32px;min-height:32px;font-size:22px;cursor:pointer;line-height:1;">⋮</button>`;
+}
+
+function fecharAcoesVenda() {
+  document.getElementById('acoes-venda-menu')?.remove();
+}
+
+function abrirAcoesVenda(event, idVenda) {
+  event.stopPropagation();
+  const anterior = document.getElementById('acoes-venda-menu');
+  const mesmo = anterior?.dataset.venda === String(idVenda);
+  fecharAcoesVenda();
+  if(mesmo) return;
+  const venda = items.find(v=>Number(v.id_venda)===idVenda);
+  if(!venda) return;
+  const menu = document.createElement('div');
+  menu.id = 'acoes-venda-menu';
+  menu.dataset.venda = String(idVenda);
+  menu.setAttribute('role','menu');
+  menu.style.cssText = 'position:fixed;z-index:10000;width:220px;padding:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 24px #0004;';
+  const status = String(venda.status_entrega||'').toUpperCase();
+  const acoes = [
+    status==='ENTREGUE'
+      ? ['Cancelar entrega',()=>cancelarEntrega(idVenda),false]
+      : ['Marcar como entregue',()=>marcarEntregue(idVenda),status==='CANCELADO'],
+    ['Imprimir ticket',()=>imprimirTicketVenda(idVenda,'imprimir'),false],
+    ['Enviar pelo WhatsApp',()=>imprimirTicketVenda(idVenda,'whatsapp'),false]
+  ];
+  acoes.forEach(([label,acao,disabled])=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('role','menuitem');
+    button.textContent = label;
+    button.disabled = disabled;
+    button.style.cssText = `display:block;width:100%;text-align:left;padding:12px 10px;border:0;border-radius:4px;background:transparent;color:var(--text);font:inherit;cursor:pointer;opacity:${disabled?'.45':'1'};`;
+    button.onclick = async e=>{
+      e.stopPropagation();
+      if(!podeSairDoFormulario()) return;
+      fecharAcoesVenda();
+      try { await acao(); } catch(err) { toast('Não foi possível concluir a ação: '+err.message,'error'); }
+    };
+    menu.appendChild(button);
+  });
+  document.body.appendChild(menu);
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.left = Math.max(8,Math.min(rect.right-220,window.innerWidth-228))+'px';
+  menu.style.top = Math.max(8,Math.min(rect.bottom+4,window.innerHeight-menu.offsetHeight-8))+'px';
+  menu.querySelector('button:not(:disabled)')?.focus();
+}
+
+document.addEventListener('click',fecharAcoesVenda);
+document.addEventListener('keydown',e=>{if(e.key==='Escape') fecharAcoesVenda();});
+window.addEventListener('resize',fecharAcoesVenda);
+document.addEventListener('scroll',fecharAcoesVenda,true);
+
+async function imprimirTicketVenda(idVenda, acao = '') {
   const venda = items.find(v=>Number(v.id_venda)===Number(idVenda));
   if(!venda){ toast('Venda não encontrada para impressão.','error'); return; }
 
-  const [itensBanco,contasBanco]=await Promise.all([
-    itensVenda.length?Promise.resolve(null):apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`),
+  const win = window.open('', '_blank', 'width=520,height=820');
+  if(!win){ toast('Pop-up bloqueado. Permita pop-ups para imprimir.','error'); return; }
+  win.document.body.textContent = 'Preparando ticket...';
+  let itensBanco, contasBanco;
+  try { [itensBanco,contasBanco]=await Promise.all([
+    apiGet(`venda_itens?select=*,produtos!fk_item_produto(nome_mercadoria)&id_venda=eq.${idVenda}`),
     apiGet(`contas_receber?select=data_vencimento,numero_parcela,total_parcelas&id_venda=eq.${idVenda}&order=numero_parcela.asc,data_vencimento.asc`)
-  ]);
-  const itens=itensVenda.length?itensVenda:(Array.isArray(itensBanco)?itensBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensBanco);
-  if(!Array.isArray(itens) || !itens.length){ toast('Venda sem itens para impressão.','error'); return; }
+  ]); } catch(err) { win.close(); throw err; }
+  const itens=Array.isArray(itensBanco)?itensBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensBanco;
+  if(!Array.isArray(itens) || !itens.length){ win.close(); toast('Venda sem itens para impressão.','error'); return; }
 
   const cliente = venda.clientes?.nome_fantasia || venda.clientes?.razao_social || `Cliente #${venda.id_cliente}`;
   const fmt = n => 'R$ ' + Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1719,12 +1782,12 @@ async function imprimirTicketVenda(idVenda) {
     </body>
     </html>`;
 
-  const win = window.open('', '_blank', 'width=520,height=820');
-  if(!win){ toast('Pop-up bloqueado. Permita pop-ups para imprimir.','error'); return; }
   win.document.open();
   win.document.write(html);
   win.document.close();
   win.focus();
+  if(acao==='imprimir') win.imprimirImagem();
+  if(acao==='whatsapp') await win.enviarWhatsApp();
 }
 
 function buildVendaItensPayload(vendaId, itens = itensVenda) {
@@ -1935,6 +1998,12 @@ async function gerarContasReceberVenda(idVenda, venda, opcoes={}) {
   return {ok:true,data:conferidas.length?conferidas:[...atualizadas,...criadas]};
 }
 
+async function voltarParaVendasAposCadastroSalvo() {
+  if(!isNew)return false;
+  await finalizarCadastroNovo();
+  return true;
+}
+
 async function saveVenda() {
   const codigo = document.getElementById('f-codigo_venda').value.trim();
   const id_cliente = document.getElementById('f-id_cliente').value;
@@ -1955,7 +2024,9 @@ async function saveVenda() {
   if(desconto>totalProd+0.005){toast('O desconto do pedido não pode ser maior que o total dos itens.','error');return;}
   const final = Math.max(0,totalProd-desconto);
   const status = document.getElementById('f-status_entrega').value || 'PENDENTE';
-  const statusAnterior = isNew ? 'PENDENTE' : (items.find(x=>Number(x.id_venda)===Number(currentId))?.status_entrega || 'PENDENTE');
+  const vendaAnteriorCadastro=isNew?null:items.find(x=>Number(x.id_venda)===Number(currentId));
+  const statusAnterior = vendaAnteriorCadastro?.status_entrega || 'PENDENTE';
+  const novaEntrega=status==='ENTREGUE'&&statusAnterior!=='ENTREGUE';
   const meioPagamentoForm = document.getElementById('f-meio_pagamento').value || null;
   const vendaDataBase = (data_venda || toLocalDateTimeInput()).slice(0,10);
   const vencimentoForm = document.getElementById('f-data_vencimento').value || null;
@@ -1984,11 +2055,16 @@ async function saveVenda() {
     data_vencimento: vencimentoSeguro,
     observacoes: document.getElementById('f-observacoes').value.trim()||null
   };
+  const dadosVendaPersistidos=novaEntrega?{
+    ...dadosVenda,
+    status_entrega:statusAnterior,
+    data_entrega:vendaAnteriorCadastro?.data_entrega||null
+  }:dadosVenda;
 
   let vendaId = currentId;
 
   if(isNew) {
-    const{ok,data:res}=await apiPost('vendas',dadosVenda);
+    const{ok,data:res}=await apiPost('vendas',dadosVendaPersistidos);
     if(!ok){
       const erro=res?.message||'erro';
       const codigoGlobal=/vendas_codigo_venda_key|duplicate key/i.test(erro);
@@ -2006,7 +2082,7 @@ async function saveVenda() {
   } else {
     const itensAnterioresBanco = await apiGet(`venda_itens?select=id_produto,quantidade,preco_unitario,desconto_item&id_venda=eq.${currentId}`);
     const itensAnteriores=Array.isArray(itensAnterioresBanco)?itensAnterioresBanco.map(i=>({...i,desconto_item:Number(i.quantidade||0)>0?Number(i.desconto_item||0)/Number(i.quantidade):0})):itensAnterioresBanco;
-    const{ok,data:res}=await apiPatch(`vendas?id_venda=eq.${currentId}`,dadosVenda);
+    const{ok,data:res}=await apiPatch(`vendas?id_venda=eq.${currentId}`,dadosVendaPersistidos);
     if(!ok){ toast('Erro: '+(res?.message||'erro'),'error'); btn.disabled=false; btn.textContent='✓ Salvar Alterações'; return; }
     // Só deletar e reinserir itens se houver itens na tela
     if(itensVenda.length === 0) {
@@ -2038,41 +2114,92 @@ async function saveVenda() {
   const especiais=await sincronizarPrecosEspeciaisDaVenda(Number(id_cliente),itensVenda);
   if(!especiais.ok){
     toast('A venda foi salva, mas não foi possível cadastrar todos os preços especiais. Tente salvar novamente.','error');
+    if(await voltarParaVendasAposCadastroSalvo())return;
     btn.disabled=false;
     btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
     return;
   }
 
   if(status === 'ENTREGUE') {
+    const titulosAnteriores=await apiGet(`contas_receber?select=*&id_venda=eq.${vendaId}&order=numero_parcela.asc,id_conta.asc`);
+    if(!Array.isArray(titulosAnteriores)){
+      toast('Entrega não confirmada. O pedido permaneceu pendente porque não foi possível conferir o financeiro.','error');
+      if(await voltarParaVendasAposCadastroSalvo())return;
+      btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+      return;
+    }
     const contasRes = await gerarContasReceberVenda(vendaId, {
       ...dadosVenda,
       id_venda: vendaId
     });
     if(!contasRes.ok) {
-      toast('Venda salva, mas erro ao gerar financeiro: '+(contasRes.data?.message||'erro'),'error');
+      const financeiroRestaurado=await restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores);
+      toast(`Entrega não confirmada: ${contasRes.data?.message||'erro ao gerar financeiro'}.${financeiroRestaurado?' O pedido permaneceu pendente e o financeiro foi restaurado.':' ATENÇÃO: confira o financeiro, pois a restauração falhou.'}`,'error');
+      if(await voltarParaVendasAposCadastroSalvo())return;
       btn.disabled=false; btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
       return;
     }
-    const vendaAnterior=items.find(x=>Number(x.id_venda)===Number(vendaId));
-    const financeiro=await prepararIntegracaoBaixaContaReceber({id_conta_financas:vendaAnterior?.id_conta_financas||null});
+    const financeiro=await prepararIntegracaoBaixaContaReceber({id_conta_financas:vendaAnteriorCadastro?.id_conta_financas||null});
     if(!financeiro.ok){
-      if(!financeiro.cancelada)toast(financeiro.message,'error');
+      const financeiroRestaurado=await restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores);
+      const motivo=financeiro.cancelada?'a seleção da conta do Finanças foi cancelada':financeiro.message;
+      toast(`Entrega não confirmada: ${motivo}.${financeiroRestaurado?' O pedido permaneceu pendente e o financeiro foi restaurado.':' ATENÇÃO: confira o financeiro, pois a restauração falhou.'}`,'error');
+      if(await voltarParaVendasAposCadastroSalvo())return;
       btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
       return;
     }
     const titulosCriados=Array.isArray(contasRes.data)?contasRes.data:[];
-    const sincronizacao=await vincularTitulosReceberFinancas(titulosCriados,financeiro,`Venda ${dadosVenda.codigo_venda||vendaAnterior?.codigo_venda||'#'+vendaId}`);
+    const sincronizacao=await vincularTitulosReceberFinancas(titulosCriados,financeiro,`Venda ${dadosVenda.codigo_venda||vendaAnteriorCadastro?.codigo_venda||'#'+vendaId}`);
     if(!sincronizacao.ok){
-      toast('Venda salva, mas o Finanças não foi atualizado: '+sincronizacao.message,'error');
+      const financeiroRestaurado=await restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores);
+      toast(`Entrega não confirmada porque o Finanças falhou: ${sincronizacao.message}.${financeiroRestaurado?' O pedido permaneceu pendente e o financeiro foi restaurado.':' ATENÇÃO: confira o financeiro, pois a restauração falhou.'}`,'error');
+      if(await voltarParaVendasAposCadastroSalvo())return;
       btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
       return;
     }
 
-    if(statusAnterior !== 'ENTREGUE') {
-      const estoqueRes = await ajustarEstoqueVenda(vendaId, 'baixar');
+    let estoqueRes={ok:true,itens:[]};
+    if(novaEntrega) {
+      estoqueRes = await ajustarEstoqueVenda(vendaId, 'baixar');
       if(!estoqueRes.ok) {
-        toast('Financeiro gerado, mas houve erro ao baixar estoque: '+estoqueRes.message,'error');
+        const financeiroRestaurado=await restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores);
+        toast(`Entrega não confirmada: ${estoqueRes.message}.${financeiroRestaurado?' O pedido permaneceu pendente e o financeiro foi restaurado.':' ATENÇÃO: confira o financeiro, pois a restauração falhou.'}`,'error');
+        if(await voltarParaVendasAposCadastroSalvo())return;
+        btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+        return;
       }
+
+      const entregaRes=await apiPatch(`vendas?id_venda=eq.${vendaId}`,dadosVenda);
+      if(!entregaRes.ok||!Array.isArray(entregaRes.data)||!entregaRes.data.length){
+        const [estoqueRestaurado,financeiroRestaurado]=await Promise.all([
+          restaurarAjusteEstoqueVenda(estoqueRes.itens),
+          restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores)
+        ]);
+        const motivo=entregaRes.data?.message||'a venda não pôde ser atualizada';
+        toast(`Entrega não confirmada: ${motivo}.${estoqueRestaurado&&financeiroRestaurado?' O pedido permaneceu pendente e as alterações foram desfeitas.':' ATENÇÃO: confira pedido, estoque e financeiro.'}`,'error');
+        if(await voltarParaVendasAposCadastroSalvo())return;
+        btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+        return;
+      }
+    }
+
+    const [vendaConferida,titulosConferidos]=await Promise.all([
+      apiGet(`vendas?select=id_venda,status_entrega&id_venda=eq.${vendaId}`),
+      apiGet(`contas_receber?select=id_conta&id_venda=eq.${vendaId}`)
+    ]);
+    const entregaConfirmada=Array.isArray(vendaConferida)&&vendaConferida.length===1&&vendaConferida[0].status_entrega==='ENTREGUE';
+    const financeiroConfirmado=Array.isArray(titulosConferidos)&&titulosConferidos.length===quantidadeParcelasForm;
+    if(!entregaConfirmada||!financeiroConfirmado){
+      const restauracoes=[restaurarFinanceiroEntregaVenda(vendaId,titulosAnteriores)];
+      if(novaEntrega){
+        restauracoes.push(restaurarAjusteEstoqueVenda(estoqueRes.itens));
+        restauracoes.push(apiPatch(`vendas?id_venda=eq.${vendaId}`,{status_entrega:statusAnterior,data_entrega:vendaAnteriorCadastro?.data_entrega||null}));
+      }
+      await Promise.all(restauracoes);
+      toast('Entrega não confirmada: a conferência final da venda e do financeiro falhou. O pedido foi mantido pendente.','error');
+      if(await voltarParaVendasAposCadastroSalvo())return;
+      btn.disabled=false;btn.textContent=isNew?'+ Registrar Venda':'✓ Salvar Alterações';
+      return;
     }
   }
 
@@ -2232,14 +2359,6 @@ async function confirmarEntrega(idVenda) {
       return;
     }
   }
-  const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`, dadosEntrega);
-  if(!vendaRes.ok) {
-    const estoqueRestaurado=await restaurarAjusteEstoqueVenda(estoqueRes.itens);
-    toast('Entrega não confirmada: '+(vendaRes.data?.message||'erro')+(estoqueRestaurado?' O estoque foi restaurado.':' ATENÇÃO: confira o estoque, pois a restauração falhou.'),'error');
-    if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
-    return;
-  }
-
   const vendaAtualizada = { ...venda, ...dadosEntrega };
   const contaRes = await gerarContasReceberVenda(idVenda, vendaAtualizada, {
     meio_pagamento: pagamento,
@@ -2251,13 +2370,12 @@ async function confirmarEntrega(idVenda) {
   });
   if(!contaRes.ok) {
     console.error('Erro ao salvar conta a receber:', contaRes.data);
-    const [estoqueRestaurado,financeiroRestaurado,vendaRestaurada]=await Promise.all([
+    const [estoqueRestaurado,financeiroRestaurado]=await Promise.all([
       restaurarAjusteEstoqueVenda(estoqueRes.itens),
-      restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores),
-      apiPatch(`vendas?id_venda=eq.${idVenda}`,dadosVendaAnteriores)
+      restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores)
     ]);
-    const reversaoOk=estoqueRestaurado&&financeiroRestaurado&&vendaRestaurada.ok;
-    toast(`Entrega não confirmada: ${contaRes.data?.message||'erro ao gerar contas a receber'}.${reversaoOk?' Pedido, estoque e financeiro foram restaurados.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
+    const reversaoOk=estoqueRestaurado&&financeiroRestaurado;
+    toast(`Entrega não confirmada: ${contaRes.data?.message||'erro ao gerar contas a receber'}.${reversaoOk?' O pedido continua pendente e as alterações foram desfeitas.':' ATENÇÃO: a reversão não terminou completamente; confira estoque e financeiro.'}`,'error');
     if(btn){ btn.disabled = false; btn.textContent = '✅ Confirmar Entrega'; }
     return;
   }
@@ -2271,16 +2389,48 @@ async function confirmarEntrega(idVenda) {
       if(!vinculo.ok)throw new Error(vinculo.message);
     }catch(e){erroFinancas=e;}
     if(erroFinancas){
-      const [estoqueRestaurado,financeiroRestaurado,vendaRestaurada]=await Promise.all([
+      const [estoqueRestaurado,financeiroRestaurado]=await Promise.all([
         restaurarAjusteEstoqueVenda(estoqueRes.itens),
-        restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores),
-        apiPatch(`vendas?id_venda=eq.${idVenda}`,dadosVendaAnteriores)
+        restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores)
       ]);
-      const reversaoOk=estoqueRestaurado&&financeiroRestaurado&&vendaRestaurada.ok;
-      toast(`Entrega não confirmada porque o Finanças falhou: ${erroFinancas.message||erroFinancas}.${reversaoOk?' Pedido, estoque e contas a receber foram restaurados.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
+      const reversaoOk=estoqueRestaurado&&financeiroRestaurado;
+      toast(`Entrega não confirmada porque o Finanças falhou: ${erroFinancas.message||erroFinancas}.${reversaoOk?' O pedido continua pendente e as alterações foram desfeitas.':' ATENÇÃO: a reversão não terminou completamente; confira estoque e financeiro.'}`,'error');
       if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
       return;
     }
+  }
+
+  // A venda so recebe o status ENTREGUE depois que estoque, contas a receber
+  // e a integracao externa terminaram com sucesso.
+  const vendaRes = await apiPatch(`vendas?id_venda=eq.${idVenda}`, dadosEntrega);
+  if(!vendaRes.ok || !Array.isArray(vendaRes.data) || !vendaRes.data.length) {
+    const motivo=vendaRes.data?.message||'a venda não pôde ser atualizada';
+    const [estoqueRestaurado,financeiroRestaurado]=await Promise.all([
+      restaurarAjusteEstoqueVenda(estoqueRes.itens),
+      restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores)
+    ]);
+    const reversaoOk=estoqueRestaurado&&financeiroRestaurado;
+    toast(`Entrega não confirmada: ${motivo}.${reversaoOk?' O pedido continua pendente e as alterações foram desfeitas.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
+    if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
+    return;
+  }
+
+  const [vendaConferida,titulosConferidos]=await Promise.all([
+    apiGet(`vendas?select=id_venda,status_entrega&id_venda=eq.${idVenda}`),
+    apiGet(`contas_receber?select=id_conta&id_venda=eq.${idVenda}`)
+  ]);
+  const entregaConfirmada=Array.isArray(vendaConferida)&&vendaConferida.length===1&&vendaConferida[0].status_entrega==='ENTREGUE';
+  const financeiroConfirmado=Array.isArray(titulosConferidos)&&titulosConferidos.length===parcelasEntrega;
+  if(!entregaConfirmada||!financeiroConfirmado){
+    const [estoqueRestaurado,financeiroRestaurado,vendaRestaurada]=await Promise.all([
+      restaurarAjusteEstoqueVenda(estoqueRes.itens),
+      restaurarFinanceiroEntregaVenda(idVenda,titulosAnteriores),
+      apiPatch(`vendas?id_venda=eq.${idVenda}`,dadosVendaAnteriores)
+    ]);
+    const reversaoOk=estoqueRestaurado&&financeiroRestaurado&&vendaRestaurada.ok&&Array.isArray(vendaRestaurada.data)&&vendaRestaurada.data.length;
+    toast(`Entrega não confirmada: a conferência final da venda e do financeiro falhou.${reversaoOk?' O pedido voltou ao estado anterior.':' ATENÇÃO: a reversão não terminou completamente; confira pedido, estoque e financeiro.'}`,'error');
+    if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrega';}
+    return;
   }
 
   document.getElementById('entrega-modal')?.remove();

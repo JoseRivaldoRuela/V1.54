@@ -701,14 +701,16 @@ function renderBaixaClienteContas() {
         O sistema vai baixar primeiro os pedidos mais antigos em aberto. Se o pagamento nao quitar tudo, o ultimo pedido fica parcial.
       </div>
       <div class="form-actions">
-        <button class="btn btn-primary" onclick="aplicarBaixaClienteContas()">Baixar pagamento</button>
+        <button class="btn btn-primary" id="baixa-cliente-confirmar" onclick="aplicarBaixaClienteContas()">Baixar pagamento</button>
         <button class="btn btn-secondary" onclick="renderDashboardContas()">Cancelar</button>
       </div>
     </div>`;
   carregarContaFinancasBaixaCliente();
 }
 
+let baixaClienteEmAndamento = false;
 async function aplicarBaixaClienteContas() {
+  if(baixaClienteEmAndamento){toast('A baixa ja esta sendo processada. Aguarde.','info');return;}
   const idCliente = Number(document.getElementById('baixa-cliente')?.value || 0);
   let restante = Number(document.getElementById('baixa-valor')?.value || 0);
   const dataInput = document.getElementById('baixa-data')?.value;
@@ -722,13 +724,23 @@ async function aplicarBaixaClienteContas() {
   if(atualizarFinancas&&grupoFinancas?.dataset.integracaoAtiva==='true'&&!contaFinancas){toast('Selecione a conta do Finanças.','error');return;}
 
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
+  baixaClienteEmAndamento=true;
+  const botaoConfirmar=document.getElementById('baixa-cliente-confirmar');
+  if(botaoConfirmar){botaoConfirmar.disabled=true;botaoConfirmar.textContent='Processando...';}
+  try {
   const abertas = contasAbertasOrdenadas(items).filter(c=>Number(c.id_cliente)===idCliente);
   if(!abertas.length) { toast('Cliente sem contas em aberto.','error'); return; }
 
   const financeiro=await prepararIntegracaoBaixaContaReceber(abertas[0],contaFinancas,atualizarFinancas,{criarCategoria:false});
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
-  const baixa = await executarBaixaReceberAtomica(abertas,restante,{data_baixa,meio_pagamento:meio,observacoes},financeiro);
+  const valorInformado = restante;
+  const obsLote = [
+    'Baixa por cliente',
+    `valor informado ${contasFmtMoeda(valorInformado)}`,
+    observacoes
+  ].filter(Boolean).join(' - ');
+  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote},financeiro);
   if(!baixa.ok){toast(baixa.message,'error');return;}
   const totalAplicado=baixa.aplicado, qtd=baixa.qtd;
   restante=baixa.sobra;
@@ -737,6 +749,101 @@ async function aplicarBaixaClienteContas() {
   toast(`Baixado ${contasFmtMoeda(totalAplicado)} em ${qtd} conta(s).${sobraMsg}`,'success');
   await loadItems();
   await renderDashboardContas();
+  } finally {
+    baixaClienteEmAndamento=false;
+    if(botaoConfirmar?.isConnected){botaoConfirmar.disabled=false;botaoConfirmar.textContent='Baixar pagamento';}
+  }
+}
+
+async function renderAuditoriaBaixasContas() {
+  const hoje = new Date();
+  const dataFimPadrao = contasFmtDataLocal(hoje);
+  const dataInicioPadrao = contasFmtDataLocal(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+  const clientes = {};
+  (Array.isArray(items)?items:[]).forEach(c=>{
+    const id=Number(c.id_cliente||0);
+    if(!id||clientes[id])return;
+    clientes[id]=c.clientes?.nome_fantasia||c.clientes?.razao_social||`Cliente #${id}`;
+  });
+  document.getElementById('content-header').style.display = 'none';
+  document.getElementById('content-body').innerHTML = `
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <button onclick="renderDashboardContas()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;padding:5px 12px;cursor:pointer;">Voltar</button>
+      <span style="font-size:15px;font-weight:600;">Auditoria de baixas</span>
+    </div>
+    <div class="dash-chart-box" style="margin-bottom:14px;">
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Baixas de</label><input class="form-input" type="date" id="auditoria-baixa-data-inicio" value="${dataInicioPadrao}"></div>
+        <div class="form-group"><label class="form-label">Ate</label><input class="form-input" type="date" id="auditoria-baixa-data-fim" value="${dataFimPadrao}"></div>
+        <div class="form-group full"><label class="form-label">Cliente</label><select class="form-input form-select" id="auditoria-baixa-cliente"><option value="">Todos</option>${Object.entries(clientes).sort((a,b)=>a[1].localeCompare(b[1])).map(([id,nome])=>`<option value="${id}">${nome}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary" onclick="executarAuditoriaBaixasContas()">Conferir baixas</button></div>
+    </div>
+    <div id="auditoria-baixas-resultado" class="dash-chart-box"><div style="color:var(--text3);font-size:13px;">Informe o periodo e clique em Conferir baixas.</div></div>`;
+}
+
+async function executarAuditoriaBaixasContas() {
+  const inicioAlvo=document.getElementById('auditoria-baixa-data-inicio')?.value;
+  const fimAlvo=document.getElementById('auditoria-baixa-data-fim')?.value;
+  const idCliente=Number(document.getElementById('auditoria-baixa-cliente')?.value||0);
+  const box=document.getElementById('auditoria-baixas-resultado');
+  if(!inicioAlvo||!fimAlvo){toast('Informe o periodo das baixas.','error');return;}
+  if(inicioAlvo>fimAlvo){toast('A data inicial deve ser anterior a data final.','error');return;}
+  box.innerHTML='<div class="loading" style="padding:18px 0;"><div class="spinner"></div> Conferindo baixas...</div>';
+  const inicio=`${inicioAlvo}T00:00:00`;
+  const fim=contasFmtDataLocal(new Date(contasDateLocal(fimAlvo).getTime()+864e5))+'T00:00:00';
+  const baixas=await apiGet(`contas_receber_baixas?select=*&data_baixa=gte.${encodeURIComponent(inicio)}&data_baixa=lt.${encodeURIComponent(fim)}&order=id_cliente.asc,id_conta.asc,id_baixa.asc`);
+  if(!Array.isArray(baixas)){box.innerHTML='<div style="color:var(--danger);">Nao foi possivel consultar o historico de baixas.</div>';return;}
+  const baixasFiltradas=idCliente?baixas.filter(b=>Number(b.id_cliente)===idCliente):baixas;
+  const ids=[...new Set(baixasFiltradas.map(b=>Number(b.id_conta)).filter(Boolean))];
+  if(!ids.length){box.innerHTML='<div style="color:var(--text3);font-size:13px;">Nenhuma baixa encontrada para este filtro.</div>';return;}
+  const titulosBanco=await apiGet(`contas_receber?select=*,clientes!fk_conta_cliente(nome_fantasia,razao_social)&id_conta=in.(${ids.join(',')})`);
+  const titulos=Array.isArray(titulosBanco)?titulosBanco:[];
+  const baixasHistoricoBanco=await apiGet(`contas_receber_baixas?select=*&id_conta=in.(${ids.join(',')})`);
+  const baixasHistorico=Array.isArray(baixasHistoricoBanco)?baixasHistoricoBanco:baixasFiltradas;
+  await anexarCodigoVendaContas(titulos);
+  const tituloPorId=new Map(titulos.map(c=>[Number(c.id_conta),c]));
+  const porConta={};
+  baixasFiltradas.forEach(b=>{
+    const id=Number(b.id_conta);
+    if(!porConta[id])porConta[id]=[];
+    porConta[id].push(b);
+  });
+  const linhas=Object.entries(porConta).map(([id,lista])=>{
+    const c=tituloPorId.get(Number(id));
+    const baixaDia=Number(lista.reduce((s,b)=>s+Number(b.valor_baixa||0),0).toFixed(2));
+    const recebido=contasValorRecebido(c);
+    const totalHistorico=baixasHistorico.filter(b=>Number(b.id_conta)===Number(id)).reduce((s,b)=>s+Number(b.valor_baixa||0),0);
+    const vendaDepois=c?.data_venda&&contasDateOnly(c.data_venda)>fimAlvo;
+    const difHist=Math.abs(Number(totalHistorico.toFixed(2))-Number(recebido.toFixed(2)))>0.005;
+    const alertas=[vendaDepois?'baixa antes da venda':'',difHist?'historico diferente do recebido':''].filter(Boolean);
+    return {c,lista,baixaDia,recebido,totalHistorico:Number(totalHistorico.toFixed(2)),alertas};
+  });
+  const totalDia=linhas.reduce((s,l)=>s+l.baixaDia,0);
+  const problemas=linhas.filter(l=>l.alertas.length);
+  box.innerHTML=`
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:13px;color:var(--text2);">
+      <span>${linhas.length} titulo${linhas.length!==1?'s':''}</span>
+      <strong style="color:var(--accent);font-family:var(--mono);">${contasFmtMoeda(totalDia)}</strong>
+      <span>${problemas.length} alerta${problemas.length!==1?'s':''}</span>
+    </div>
+    <div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:920px;">
+      <thead><tr style="background:var(--surface2);"><th style="padding:8px;text-align:left;">Cliente</th><th style="padding:8px;text-align:center;">Pedido</th><th style="padding:8px;text-align:center;">Venda</th><th style="padding:8px;text-align:center;">Venc.</th><th style="padding:8px;text-align:right;">Original</th><th style="padding:8px;text-align:right;">Baixa no periodo</th><th style="padding:8px;text-align:right;">Recebido titulo</th><th style="padding:8px;text-align:right;">Historico baixas</th><th style="padding:8px;text-align:left;">Alerta</th></tr></thead>
+      <tbody>${linhas.map(l=>{
+        const c=l.c||{};
+        return `<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="${c.id_conta?`openItem(${c.id_conta})`:''}">
+          <td style="padding:8px;">${c.clientes?.nome_fantasia||c.clientes?.razao_social||'-'}</td>
+          <td style="padding:8px;text-align:center;color:var(--accent2);font-family:var(--mono);">${c.codigo_venda||(c.id_venda?'#'+c.id_venda:'-')}</td>
+          <td style="padding:8px;text-align:center;">${contasFmtDataBR(c.data_venda)}</td>
+          <td style="padding:8px;text-align:center;">${contasFmtDataBR(c.data_vencimento)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--mono);">${contasFmtMoeda(c.valor_original)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--mono);color:var(--accent);">${contasFmtMoeda(l.baixaDia)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--mono);">${contasFmtMoeda(l.recebido)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--mono);color:${Math.abs(l.totalHistorico-l.recebido)>0.005?'var(--danger)':'var(--text2)'};">${contasFmtMoeda(l.totalHistorico)}</td>
+          <td style="padding:8px;color:${l.alertas.length?'var(--danger)':'var(--text3)'};">${l.alertas.join('; ')||'ok'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
 }
 
 
@@ -1581,7 +1688,6 @@ async function renderDashboardContas() {
   const pendentes = contas.filter(c=>contasValorAberto(c) > 0.005);
   const recebidas = contas.filter(c=>contasValorRecebido(c) > 0.005);
   const receberHoje = pendentes.filter(c=>{const d=contasDateLocal(c.data_vencimento); return d>=hoje && d<amanha;});
-  const receberSemana = pendentes.filter(c=>{const d=contasDateLocal(c.data_vencimento); return d>=inicioSemana && d<amanha;});
   const receberMes = pendentes.filter(c=>{const d=contasDateOnly(c.data_vencimento); return d>=range.inicio && d<range.fim;});
   const receberMesAnterior = pendentes.filter(c=>{const d=contasDateOnly(c.data_vencimento); return d>=range.anteriorInicio && d<range.anteriorFim;});
   const recebidasHoje = recebidas.filter(c=>{const d=c.data_recebimento?new Date(c.data_recebimento):null; return d&&d>=hoje&&d<amanha;});
@@ -1589,6 +1695,9 @@ async function renderDashboardContas() {
   const recebidasMes = recebidas.filter(c=>{const d=contasDateOnly(c.data_recebimento); return d>=range.inicio && d<range.fim;});
   const recebidasMesAnterior = recebidas.filter(c=>{const d=contasDateOnly(c.data_recebimento); return d>=range.anteriorInicio && d<range.anteriorFim;});
   const vencidas = pendentes.filter(c=>contasDateLocal(c.data_vencimento) < hoje);
+  const aVencer = pendentes.filter(c=>contasDateLocal(c.data_vencimento) >= hoje);
+  const vencidasMes = receberMes.filter(c=>contasDateLocal(c.data_vencimento) < hoje);
+  const aVencerMes = receberMes.filter(c=>contasDateLocal(c.data_vencimento) >= hoje);
   const proximos7 = pendentes.filter(c=>{const d=contasDateLocal(c.data_vencimento); return d>=hoje && d<=new Date(hoje.getTime()+7*864e5);});
   const d15 = pendentes.filter(c=>{const d=contasDateLocal(c.data_vencimento); return d>new Date(hoje.getTime()+7*864e5) && d<=new Date(hoje.getTime()+15*864e5);});
   const d30 = pendentes.filter(c=>{const d=contasDateLocal(c.data_vencimento); return d>new Date(hoje.getTime()+15*864e5) && d<=new Date(hoje.getTime()+30*864e5);});
@@ -1619,6 +1728,11 @@ async function renderDashboardContas() {
       <div style="font-size:10px;color:var(--text3);margin-top:2px;">${qtd} conta${qtd!==1?'s':''}</div>
       ${extra}
     </button>`;
+  const resumoLinhaConferencia = (filtro, label, lista, cor) => `
+    <button onclick="listarContas('${filtro}','${label}')" style="background:transparent;border:0;border-top:1px solid var(--border);padding:9px 0 0;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;cursor:pointer;text-align:left;">
+      <span style="font-size:12px;color:var(--text2);">${label}</span>
+      <strong style="font-size:13px;color:${cor};font-family:var(--mono);white-space:nowrap;">${contasFmtMoeda(contasSoma(lista))}</strong>
+    </button>`;
 
   const totalBase = Math.max(1, contasSoma(pendentes) + contasSoma(recebidasMes,true));
   const vendasSemTitulo=[];
@@ -1647,7 +1761,10 @@ async function renderDashboardContas() {
     <div style="margin-bottom:14px;padding:12px;border:1px solid var(--danger);border-radius:8px;background:rgba(255,70,90,.09);">
       <div style="font-weight:700;color:var(--danger);margin-bottom:5px;">Falha de integridade financeira: ${totalProblemas} inconsistencia${totalProblemas!==1?'s':''}</div>
       <div style="font-size:12px;color:var(--text2);">${inconsistenciasVenda.map(x=>`${x.venda.codigo_venda||'#'+x.venda.id_venda} - ${x.venda.clientes?.nome_fantasia||x.venda.clientes?.razao_social||'Cliente'} - ${contasFmtMoeda(x.venda.valor_final)}: <strong>${x.motivos.join('; ')}</strong>`).join('<br>')}</div>
-      <div style="font-size:11px;color:var(--text3);margin-top:8px;">Diagnostico somente leitura. Nenhum registro foi alterado.</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+        ${vendasSemTitulo.length?`<button type="button" class="btn btn-primary" onclick="repararVendasSemContaReceber()">Criar titulos ausentes</button>`:''}
+        <div style="font-size:11px;color:var(--text3);">Diagnostico somente leitura. Nenhum registro foi alterado automaticamente.</div>
+      </div>
     </div>` : '';
   const conferenciaRecentes=(Array.isArray(vendasEntregues)?vendasEntregues:[]).slice(0,10).map(v=>{
     const titulos=contas.filter(c=>Number(c.id_venda)===Number(v.id_venda));
@@ -1682,6 +1799,7 @@ async function renderDashboardContas() {
       <button class="dash-period-btn" onclick="mudarMesContasDashboard(1)" ${contasDashMesOffset>=0?'disabled style="opacity:.45;cursor:not-allowed;"':''}>Proximo mes ›</button>
       <button class="dash-period-btn" onclick="renderComparativoContas()">Comparar meses</button>
       <button class="dash-period-btn" onclick="renderBaixaClienteContas()">Baixar cliente</button>
+      <button class="dash-period-btn" onclick="renderAuditoriaBaixasContas()">Auditar baixas</button>
       <span style="font-size:12px;color:var(--text2);font-family:var(--mono);margin-left:auto;text-transform:uppercase;">${range.label}</span>
     </div>
 
@@ -1689,9 +1807,30 @@ async function renderDashboardContas() {
       <div class="dash-chart-title" style="margin-bottom:10px;"><span>A receber</span></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin-bottom:14px;">
         ${resumoCard('receber_hoje','A Receber Hoje','Hoje',contasSoma(receberHoje),receberHoje.length,'var(--warn)')}
-        ${resumoCard('receber_semana','A Receber na Semana','Semana',contasSoma(receberSemana),receberSemana.length,'var(--warn)')}
+        ${resumoCard('7dias','A Vencer nos Proximos 7 Dias','Prox. 7 dias',contasSoma(proximos7),proximos7.length,'var(--warn)')}
         ${resumoCard('receber_mes','A Receber no Mes','Mes selecionado',contasSoma(receberMes),receberMes.length,'var(--warn)',`<div style="font-size:10px;color:${variacaoColor(variacaoReceber,false)};margin-top:2px;">${variacaoText(variacaoReceber)}</div>`)}
         ${resumoCard('pendente','Aberto Total','Aberto total',contasSoma(pendentes),pendentes.length,'var(--warn)')}
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:10px;margin-bottom:16px;">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:11px 12px;">
+          <div style="font-size:11px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;margin-bottom:8px;">Conferencia do aberto total</div>
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--text2);">
+            <button onclick="listarContas('vencido','Vencidas')" style="background:transparent;border:0;padding:0;color:var(--danger);font-family:var(--mono);font-weight:700;cursor:pointer;font-size:13px;">${contasFmtMoeda(contasSoma(vencidas))}</button>
+            <span>vencidas</span>
+            <span>+</span>
+            <button onclick="listarContas('a_vencer','A Vencer')" style="background:transparent;border:0;padding:0;color:var(--warn);font-family:var(--mono);font-weight:700;cursor:pointer;font-size:13px;">${contasFmtMoeda(contasSoma(aVencer))}</button>
+            <span>a vencer</span>
+            <span>=</span>
+            <button onclick="listarContas('pendente','Aberto Total')" style="background:transparent;border:0;padding:0;color:var(--warn);font-family:var(--mono);font-weight:700;cursor:pointer;font-size:13px;">${contasFmtMoeda(contasSoma(pendentes))}</button>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-top:5px;">${vencidas.length} vencida${vencidas.length!==1?'s':''} + ${aVencer.length} a vencer = ${pendentes.length} em aberto</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:11px 12px;">
+          <div style="font-size:11px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;margin-bottom:8px;">Dentro do mes selecionado</div>
+          ${resumoLinhaConferencia('vencido_mes','Vencidas no mes',vencidasMes,'var(--danger)')}
+          ${resumoLinhaConferencia('a_vencer_mes','A vencer no mes',aVencerMes,'var(--warn)')}
+        </div>
       </div>
 
       <div class="dash-chart-title" style="margin-bottom:10px;"><span>Recebidos</span></div>
@@ -1828,9 +1967,12 @@ function listarContas(filtro, titulo) {
 
   if(filtro==='vencido') lista=lista.filter(c=>contasValorAberto(c)>0.005&&contasDateLocal(c.data_vencimento)<hoje);
   else if(filtro==='pendente') lista=lista.filter(c=>contasValorAberto(c)>0.005);
+  else if(filtro==='a_vencer') lista=lista.filter(c=>contasValorAberto(c)>0.005&&contasDateLocal(c.data_vencimento)>=hoje);
   else if(filtro==='receber_hoje') lista=lista.filter(c=>{const d=contasDateLocal(c.data_vencimento);return contasValorAberto(c)>0.005&&d>=hoje&&d<amanha;});
   else if(filtro==='receber_semana') lista=lista.filter(c=>{const d=contasDateLocal(c.data_vencimento);return contasValorAberto(c)>0.005&&d>=inicioSemana&&d<amanha;});
   else if(filtro==='receber_mes') lista=lista.filter(c=>{const d=contasDateOnly(c.data_vencimento);return contasValorAberto(c)>0.005&&d>=range.inicio&&d<range.fim;});
+  else if(filtro==='vencido_mes') lista=lista.filter(c=>{const ds=contasDateOnly(c.data_vencimento);return contasValorAberto(c)>0.005&&ds>=range.inicio&&ds<range.fim&&contasDateLocal(c.data_vencimento)<hoje;});
+  else if(filtro==='a_vencer_mes') lista=lista.filter(c=>{const ds=contasDateOnly(c.data_vencimento);return contasValorAberto(c)>0.005&&ds>=range.inicio&&ds<range.fim&&contasDateLocal(c.data_vencimento)>=hoje;});
   else if(filtro==='recebido_hoje') lista=lista.filter(c=>{const d=c.data_recebimento?new Date(c.data_recebimento):null;return contasValorRecebido(c)>0.005&&d&&d>=hoje&&d<amanha;});
   else if(filtro==='recebido_semana') lista=lista.filter(c=>{const d=c.data_recebimento?new Date(c.data_recebimento):null;return contasValorRecebido(c)>0.005&&d&&d>=inicioSemana&&d<amanha;});
   else if(filtro==='recebido_mes') lista=lista.filter(c=>{const d=contasDateOnly(c.data_recebimento);return contasValorRecebido(c)>0.005&&d>=range.inicio&&d<range.fim;});
@@ -1865,7 +2007,7 @@ function listarContas(filtro, titulo) {
             const atras=c.status_recebimento!=='RECEBIDO'&&venc<hoje;
             const sc=c.status_recebimento==='RECEBIDO'?'on':atras?'vencido':'warn';
             const sl=c.status_recebimento==='RECEBIDO'?'RECEBIDO':atras?'VENCIDO':'PENDENTE';
-            const valorLinha = c.status_recebimento==='RECEBIDO' ? (c.valor_recebido||c.valor_original) : c.valor_original;
+            const valorLinha = c.status_recebimento==='RECEBIDO' ? contasValorRecebido(c) : contasValorAberto(c);
             return `<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="openItem(${c.id_conta})" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
               <td style="padding:10px 14px;">${c.clientes?.nome_fantasia||c.clientes?.razao_social||'-'}</td>
               <td style="padding:10px 14px;text-align:center;color:var(--accent);font-family:var(--mono);font-weight:600;">${c.codigo_venda || (c.id_venda ? '#'+c.id_venda : '-')}<div style="font-size:10px;color:var(--text3);font-weight:400;margin-top:2px;">${contasFmtDataBR(c.data_venda)}</div></td>

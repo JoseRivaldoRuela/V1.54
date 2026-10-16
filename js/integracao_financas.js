@@ -178,11 +178,53 @@ async function criarMovimentoBaixaReceberFinancas({baixa,conta,titulo,integracao
   return Number(retorno?.id_movimento??retorno?.p_id_movimento??retorno)||null;
 }
 
+function solicitarDataEfetivacaoFinancas(movimento){
+  return new Promise(resolve=>{
+    document.getElementById('confirmar-data-efetivacao-financas')?.remove();
+    const hoje=dataCalendarioFinancas(new Date());
+    const modal=document.createElement('div');
+    modal.className='modal-overlay';
+    modal.id='confirmar-data-efetivacao-financas';
+    modal.style.display='flex';
+    const tipo=String(movimento?.tipo||'').toLowerCase()==='saida'?'pagamento':'recebimento';
+    modal.innerHTML=`<div class="modal" style="max-width:420px;">
+      <div class="modal-header"><span class="modal-title">Data da baixa</span></div>
+      <div class="modal-body">
+        <div style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;">Informe a data real do ${tipo} para efetivar este lancamento.</div>
+        <div class="form-group">
+          <label class="form-label">Data da baixa *</label>
+          <input class="form-input" type="date" data-data-efetivacao value="${hoje}">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button>
+        <button type="button" class="btn btn-primary" data-confirmar>Efetivar</button>
+      </div>
+    </div>`;
+    const concluir=valor=>{modal.remove();resolve(valor);};
+    modal.querySelector('[data-cancelar]').onclick=()=>concluir(null);
+    modal.querySelector('[data-confirmar]').onclick=()=>{
+      const data=modal.querySelector('[data-data-efetivacao]')?.value;
+      if(!data){toast('Informe a data da baixa.','error');return;}
+      concluir(data);
+    };
+    modal.addEventListener('click',event=>{if(event.target===modal)concluir(null);});
+    document.body.appendChild(modal);
+  });
+}
+
 async function alterarStatusMovimentoFinancas(idMovimento,status,dataEfetivacao){
   if(!idMovimento||!await empresaIntegraFinancas())return;
   const lista=await financasRequest(`movimentos?select=*&id_movimento=eq.${Number(idMovimento)}&limit=1`),m=Array.isArray(lista)?lista[0]:null;
   if(!m)return;
-  await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({p_id_movimento:m.id_movimento,p_id_conta:m.id_conta,p_id_conta_destino:m.id_conta_destino||null,p_tipo:m.tipo,p_valor:Number(m.valor),p_descricao:m.descricao,p_data_movimento:dataCalendarioFinancas(m.data_movimento),p_data_vencimento:dataCalendarioFinancas(m.data_vencimento||m.data_movimento),p_data_efetivacao:dataCalendarioFinancas(dataEfetivacao||m.data_vencimento||m.data_movimento),p_id_categoria:m.id_categoria||null,p_status:status,p_documento:m.documento||null,p_observacoes:m.observacoes||null})});
+  const statusNovo=String(status||'').toLowerCase();
+  let dataBaixa=dataEfetivacao;
+  if(statusNovo==='efetivado'&&!dataBaixa){
+    dataBaixa=await solicitarDataEfetivacaoFinancas(m);
+    if(!dataBaixa)return false;
+  }
+  await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({p_id_movimento:m.id_movimento,p_id_conta:m.id_conta,p_id_conta_destino:m.id_conta_destino||null,p_tipo:m.tipo,p_valor:Number(m.valor),p_descricao:m.descricao,p_data_movimento:dataCalendarioFinancas(m.data_movimento),p_data_vencimento:dataCalendarioFinancas(m.data_vencimento||m.data_movimento),p_data_efetivacao:dataCalendarioFinancas(dataBaixa||m.data_vencimento||m.data_movimento),p_id_categoria:m.id_categoria||null,p_status:status,p_documento:m.documento||null,p_observacoes:m.observacoes||null})});
+  return true;
 }
 
 async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
@@ -215,13 +257,18 @@ async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
       }
       const legado=reativado?0:Number((valorBaixado-total).toFixed(2));
       const saldo=Number(Math.max(0,valorOriginal-valorBaixado).toFixed(2));
+      const recebimentoVinculado=movimentos.some(x=>Number(x.id_movimento)===Number(m.id_movimento));
+      const preservarRecebimento=recebimentoVinculado&&!reativado&&!cancelado;
+      if(preservarRecebimento&&saldo>0.005){
+        throw new Error('O titulo aponta para uma baixa, mas seus valores divergem. Concilie antes de alterar.');
+      }
       await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({
-        p_id_movimento:m.id_movimento,p_id_conta:m.id_conta,p_id_conta_destino:null,p_tipo:'entrada',
-        p_valor:legado>0.005?legado:saldo>0.005?saldo:valorOriginal,
+        p_id_movimento:m.id_movimento,p_id_conta:preservarRecebimento?Number(titulo.id_conta_financas||m.id_conta):m.id_conta,p_id_conta_destino:null,p_tipo:'entrada',
+        p_valor:preservarRecebimento?Number(m.valor):legado>0.005?legado:saldo>0.005?saldo:valorOriginal,
         p_descricao:m.descricao,p_data_movimento:m.data_movimento,
         p_data_vencimento:dataCalendarioFinancas(titulo.data_vencimento||m.data_vencimento||m.data_movimento),
         p_data_efetivacao:dataCalendarioFinancas(m.data_efetivacao||titulo.data_recebimento||m.data_movimento),
-        p_id_categoria:m.id_categoria||null,p_status:cancelado?'cancelado':legado>0.005?'efetivado':saldo>0.005?'pendente':'cancelado',
+        p_id_categoria:m.id_categoria||null,p_status:cancelado?'cancelado':preservarRecebimento||legado>0.005?'efetivado':saldo>0.005?'pendente':'cancelado',
         p_documento:m.documento||null,p_observacoes:titulo.observacoes||m.observacoes||null
       })});
       return;
