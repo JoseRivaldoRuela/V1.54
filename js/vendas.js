@@ -1290,7 +1290,7 @@ function abrirAcoesVenda(event, idVenda) {
     status==='ENTREGUE'
       ? ['Cancelar entrega',()=>cancelarEntrega(idVenda),false]
       : ['Marcar como entregue',()=>marcarEntregue(idVenda),status==='CANCELADO'],
-    ['Imprimir ticket',()=>imprimirTicketVenda(idVenda,'imprimir'),false],
+    ['Imprimir na térmica',()=>imprimirTicketVenda(idVenda,'imprimir'),false],
     ['Enviar pelo WhatsApp',()=>imprimirTicketVenda(idVenda,'whatsapp'),false]
   ];
   acoes.forEach(([label,acao,disabled])=>{
@@ -1620,7 +1620,10 @@ async function imprimirTicketVenda(idVenda, acao = '') {
             try{
               await navigator.share({title:'Pedido ' + ticketData.codigo, files:[file]});
               return;
-            }catch(e){}
+            }catch(e){
+              if(e.name!=='AbortError') alert('Nao foi possivel compartilhar o pedido. Toque novamente no botao WhatsApp / Apps.');
+              return;
+            }
           }
           const url = URL.createObjectURL(file);
           const a = document.createElement('a');
@@ -1786,8 +1789,19 @@ async function imprimirTicketVenda(idVenda, acao = '') {
   win.document.write(html);
   win.document.close();
   win.focus();
-  if(acao==='imprimir') win.imprimirImagem();
-  if(acao==='whatsapp') await win.enviarWhatsApp();
+  // Compartilhamento e Bluetooth precisam do toque no próprio ticket.
+  // Não executar após as consultas: o navegador perde a ativação do usuário.
+  const botaoAcao = acao==='imprimir'
+    ? win.document.querySelector('button[onclick="imprimirTermicaBluetooth()"]')
+    : acao==='whatsapp' ? win.document.querySelector('button[onclick="enviarWhatsApp()"]') : null;
+  if(botaoAcao){
+    const atalho = botaoAcao.cloneNode(true);
+    const destaque = win.document.createElement('div');
+    destaque.className = 'actions no-print';
+    destaque.appendChild(atalho);
+    win.document.querySelector('.ticket').prepend(destaque);
+    atalho.focus();
+  }
 }
 
 function buildVendaItensPayload(vendaId, itens = itensVenda) {
