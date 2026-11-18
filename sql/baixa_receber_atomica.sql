@@ -17,15 +17,17 @@ create policy escopo_operacao_baixa on public.baixas_receber_operacoes
   with check (empresa_id=public.app_empresa_atual() and id_usuario=public.app_usuario_atual());
 grant select,insert,update on public.baixas_receber_operacoes to anon,authenticated;
 
--- Versao com taxa (cartao) e juros (atraso), igual a Financas/sql/61_baixa_receber_com_juros.sql
+-- Versao com taxa/desconto e juros, igual a Financas/sql/62_baixa_receber_com_desconto.sql
 DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT);
 DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT,NUMERIC,BIGINT);
+DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT,NUMERIC,BIGINT,NUMERIC,BIGINT);
 CREATE OR REPLACE FUNCTION public.baixar_contas_receber_atomico(
     p_id_operacao UUID,p_itens JSONB,p_data_baixa TIMESTAMPTZ,
     p_atualizar_financas BOOLEAN,p_id_conta_financas BIGINT,
     p_id_categoria BIGINT,p_observacoes TEXT DEFAULT NULL,
     p_taxa NUMERIC DEFAULT 0,p_id_categoria_taxa BIGINT DEFAULT NULL,
-    p_juros NUMERIC DEFAULT 0,p_id_categoria_juros BIGINT DEFAULT NULL
+    p_juros NUMERIC DEFAULT 0,p_id_categoria_juros BIGINT DEFAULT NULL,
+    p_tipo_taxa TEXT DEFAULT 'cartao'
 ) RETURNS JSONB
 LANGUAGE plpgsql SECURITY INVOKER
 SET search_path=public,financas,pg_temp AS $baixa$
@@ -63,6 +65,8 @@ DECLARE
     juros NUMERIC:=round(COALESCE(p_juros,0),2);
     juros_categoria BIGINT:=p_id_categoria_juros;
     juros_movimento BIGINT;
+    tipo_taxa TEXT:=COALESCE(NULLIF(lower(trim(p_tipo_taxa)),''),'cartao');
+    desconto BOOLEAN:=lower(trim(COALESCE(p_tipo_taxa,'')))='desconto';
 BEGIN
     IF empresa IS NULL OR usuario IS NULL THEN RAISE EXCEPTION 'Sessao invalida ou expirada'; END IF;
     IF p_id_operacao IS NULL OR p_data_baixa IS NULL
@@ -76,6 +80,7 @@ BEGIN
         'integrar',p_atualizar_financas,'conta',p_id_conta_financas,
         'categoria',p_id_categoria,'observacoes',p_observacoes)
         ||CASE WHEN taxa<>0 THEN jsonb_build_object('taxa',taxa,'categoria_taxa',p_id_categoria_taxa) ELSE '{}'::JSONB END
+        ||CASE WHEN taxa<>0 AND tipo_taxa<>'cartao' THEN jsonb_build_object('tipo_taxa',tipo_taxa) ELSE '{}'::JSONB END
         ||CASE WHEN juros<>0 THEN jsonb_build_object('juros',juros,'categoria_juros',p_id_categoria_juros) ELSE '{}'::JSONB END;
     INSERT INTO public.baixas_receber_operacoes(id_operacao,empresa_id,id_usuario,requisicao)
         VALUES(p_id_operacao,empresa,usuario,requisicao) ON CONFLICT DO NOTHING;
@@ -94,6 +99,7 @@ BEGIN
     IF taxa>0 AND integrado IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'A taxa so pode ser lancada com a opcao Atualizar o Financas marcada';
     END IF;
+    IF tipo_taxa NOT IN ('cartao','desconto') THEN RAISE EXCEPTION 'Tipo da diferenca invalido: use cartao ou desconto'; END IF;
     IF juros<0 THEN RAISE EXCEPTION 'Juros invalidos'; END IF;
     IF juros>0 AND taxa>0 THEN RAISE EXCEPTION 'Informe taxa ou juros, nao os dois na mesma baixa'; END IF;
     IF juros>0 AND integrado IS DISTINCT FROM TRUE THEN
@@ -243,11 +249,15 @@ BEGIN
         IF taxa_categoria IS NULL THEN
             SELECT id_categoria INTO taxa_categoria FROM financas.categorias
                 WHERE id_empresa=empresa AND ativo AND uso='saida'
-                  AND lower(trim(nome)) IN ('taxas de cartao','taxas de cartão','taxa de cartao','taxa de cartão')
+                  AND lower(trim(nome)) = ANY(CASE WHEN desconto
+                      THEN ARRAY['descontos concedidos','desconto concedido','descontos']
+                      ELSE ARRAY['taxas de cartao','taxas de cartão','taxa de cartao','taxa de cartão'] END)
                 ORDER BY id_categoria LIMIT 1;
             IF taxa_categoria IS NULL THEN
                 INSERT INTO financas.categorias(nome,uso,tipo,cor,descricao,ativo)
-                    VALUES('Taxas de cartão','saida',NULL,'#ff8a65','Taxas descontadas nos recebimentos',TRUE)
+                    VALUES(CASE WHEN desconto THEN 'Descontos concedidos' ELSE 'Taxas de cartão' END,'saida',NULL,
+                        CASE WHEN desconto THEN '#ffb74d' ELSE '#ff8a65' END,
+                        CASE WHEN desconto THEN 'Descontos concedidos a clientes nos recebimentos' ELSE 'Taxas descontadas nos recebimentos' END,TRUE)
                     RETURNING id_categoria INTO taxa_categoria;
             END IF;
         END IF;
@@ -256,7 +266,7 @@ BEGIN
         IF NOT FOUND THEN RAISE EXCEPTION 'Categoria da taxa invalida ou indisponivel'; END IF;
         argumentos:=jsonb_build_object(
             'p_tipo','saida','p_id_conta',p_id_conta_financas,'p_id_conta_destino',NULL,
-            'p_valor',taxa,'p_descricao','Taxa cartão '||COALESCE(NULLIF(array_to_string(codigos,', '),''),'recebimento'),
+            'p_valor',taxa,'p_descricao',CASE WHEN desconto THEN 'Desconto concedido ' ELSE 'Taxa cartão ' END||COALESCE(NULLIF(array_to_string(codigos,', '),''),'recebimento'),
             'p_data_movimento',data_local,'p_data_vencimento',data_local,'p_data_efetivacao',data_local,
             'p_id_categoria',taxa_categoria,'p_status','efetivado',
             'p_documento','TAXA-CR-'||baixa_id,'p_observacoes',p_observacoes);
@@ -309,11 +319,11 @@ BEGIN
         END IF;
     END IF;
     retorno:=jsonb_build_object('ok',TRUE,'aplicado',total,'qtd',jsonb_array_length(resultados),'titulos',resultados,
-        'taxa',taxa,'juros',juros,'liquido',total-taxa+juros,'id_movimento_taxa',taxa_movimento,'id_movimento_juros',juros_movimento);
+        'taxa',taxa,'tipo_taxa',tipo_taxa,'juros',juros,'liquido',total-taxa+juros,'id_movimento_taxa',taxa_movimento,'id_movimento_juros',juros_movimento);
     UPDATE public.baixas_receber_operacoes SET resultado=retorno WHERE id_operacao=p_id_operacao;
     RETURN retorno;
 END $baixa$;
-revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint) from public;
-grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint) to anon,authenticated;
+revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint,text) from public;
+grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint,text) to anon,authenticated;
 notify pgrst, 'reload schema';
 commit;

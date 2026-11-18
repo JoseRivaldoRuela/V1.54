@@ -249,7 +249,7 @@ async function renderFormConta(c) {
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Valor da baixa</label><input class="form-input" type="number" step="0.01" id="f-baixa_valor" value="${saldoAberto.toFixed(2)}" placeholder="0,00"/></div>
       <div class="form-group"><label class="form-label">Data da baixa</label><input class="form-input" type="datetime-local" id="f-baixa_data" value="${baixaDataPadrao}"/></div>
-      <div class="form-group"><label class="form-label">Valor que entrou na conta</label><input class="form-input" type="number" step="0.01" id="f-baixa_liquido" placeholder="Opcional"/><small style="display:block;color:var(--text3);margin-top:2px;">Opcional. Menor que a baixa: a diferença vira taxa (cartão). Maior: vira juros por atraso.</small></div>
+      <div class="form-group"><label class="form-label">Valor que entrou na conta</label><input class="form-input" type="number" step="0.01" id="f-baixa_liquido" placeholder="Opcional"/><select class="form-input form-select" id="f-baixa_tipo_diferenca" style="margin-top:6px;" title="Quando entrar menos que o valor da baixa"><option value="cartao">Se entrar menos: taxa de cartão</option><option value="desconto">Se entrar menos: desconto concedido</option></select><small style="display:block;color:var(--text3);margin-top:2px;">Opcional. Menor que a baixa: a diferença vira taxa de cartão ou desconto (escolha abaixo). Maior: vira juros por atraso.</small></div>
       <div class="form-group full"><label class="form-label">Observacao da baixa</label><input class="form-input" id="f-baixa_obs" placeholder="Ex: pagamento parcial, comprovante..."/></div>
     </div>` : ''}
     ${c && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? `
@@ -386,7 +386,7 @@ async function marcarRecebido() {
   const taxa=baixaAtualizaFinancas()?calcularTaxaBaixa(contasValorAberto(conta),document.getElementById('f-baixa_liquido')?.value):{ok:true,valor:0,juros:0};
   if(!taxa.ok){toast(taxa.message,'error');return;}
   const baixa=await aplicarBaixaContaReceber(conta,contasValorAberto(conta),{
-    taxa:taxa.valor,juros:taxa.juros,
+    taxa:taxa.valor,juros:taxa.juros,tipo_taxa:document.getElementById('f-baixa_tipo_diferenca')?.value,
     data_baixa:dataRecebimentoInformada?new Date(dataRecebimentoInformada).toISOString():new Date().toISOString(),
     meio_pagamento:document.getElementById('f-meio_pagamento')?.value||conta.meio_pagamento||null,
     observacoes:'Pagamento integral',
@@ -478,7 +478,7 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null,
     document.getElementById('confirmar-baixa-rapida-receber')?.remove();
     const modal=document.createElement('div');
     modal.className='modal-overlay';modal.id='confirmar-baixa-rapida-receber';modal.style.display='flex';
-    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar recebimento</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;"></div><label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Receber.</small></span></label><div class="form-group" data-grupo-conta><label class="form-label">Onde este recebimento entrou? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(lista,conta?.id_conta_financas)}</select>${valorBaixa?`<label class="form-label" style="margin-top:12px;">Valor que entrou na conta</label><input class="form-input" type="number" step="0.01" data-liquido placeholder="Opcional"><small style="display:block;color:var(--text3);margin-top:3px;">Opcional. Menor que ${contasFmtMoeda(valorBaixa)}: a diferença vira taxa (cartão). Maior: vira juros por atraso.</small>`:''}</div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data do recebimento *</label><input class="form-input" type="datetime-local" data-data-recebimento value="${dataLocal}"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button><button type="button" class="btn btn-primary" data-confirmar>Confirmar recebimento</button></div></div>`;
+    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar recebimento</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;"></div><label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Receber.</small></span></label><div class="form-group" data-grupo-conta><label class="form-label">Onde este recebimento entrou? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(lista,conta?.id_conta_financas)}</select>${valorBaixa?`<label class="form-label" style="margin-top:12px;">Valor que entrou na conta</label><input class="form-input" type="number" step="0.01" data-liquido placeholder="Opcional"><select class="form-input form-select" data-tipo-diferenca style="margin-top:6px;" title="Quando entrar menos que o valor da baixa"><option value="cartao">Se entrar menos: taxa de cartão</option><option value="desconto">Se entrar menos: desconto concedido</option></select><small style="display:block;color:var(--text3);margin-top:3px;">Opcional. Menor que ${contasFmtMoeda(valorBaixa)}: a diferença vira taxa de cartão ou desconto (escolha abaixo). Maior: vira juros por atraso.</small>`:''}</div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data do recebimento *</label><input class="form-input" type="datetime-local" data-data-recebimento value="${dataLocal}"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button><button type="button" class="btn btn-primary" data-confirmar>Confirmar recebimento</button></div></div>`;
     modal.querySelector('[data-mensagem]').textContent=mensagem;
     const campoAtualizar=modal.querySelector('[data-atualizar-financas]');
     const grupoConta=modal.querySelector('[data-grupo-conta]');
@@ -495,7 +495,7 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null,
       if(!dataRecebimento||Number.isNaN(dataRecebimento.getTime())){toast('Informe uma data de recebimento valida.','error');return;}
       const taxa=atualizarFinancas&&integracao.ativa&&valorBaixa?calcularTaxaBaixa(valorBaixa,modal.querySelector('[data-liquido]')?.value):{ok:true,valor:0,juros:0};
       if(!taxa.ok){toast(taxa.message,'error');return;}
-      concluir({ok:true,atualizarFinancas,contaId:atualizarFinancas&&integracao.ativa?contaId:null,dataRecebimento:dataRecebimento.toISOString(),taxa:taxa.valor,juros:taxa.juros});
+      concluir({ok:true,atualizarFinancas,contaId:atualizarFinancas&&integracao.ativa?contaId:null,dataRecebimento:dataRecebimento.toISOString(),taxa:taxa.valor,juros:taxa.juros,tipo_taxa:modal.querySelector('[data-tipo-diferenca]')?.value});
     };
     modal.addEventListener('click',e=>{if(e.target===modal)concluir({ok:false,cancelada:true});});
     document.body.appendChild(modal);
@@ -591,7 +591,8 @@ async function marcarContaReceberPagaRapido(idConta, event) {
     id_conta_financas:confirmacao.contaId,
     atualizar_financas:confirmacao.atualizarFinancas,
     taxa:confirmacao.taxa,
-    juros:confirmacao.juros
+    juros:confirmacao.juros,
+    tipo_taxa:confirmacao.tipo_taxa
   });
   if(!baixa.ok) {
     if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
@@ -612,7 +613,7 @@ async function baixarContaParcial() {
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
   const taxa = calcularTaxaBaixa(valor, document.getElementById('f-baixa_liquido')?.value);
   if(!taxa.ok) { toast(taxa.message,'error'); return; }
-  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes, atualizar_financas:baixaAtualizaFinancas(), taxa:taxa.valor, juros:taxa.juros });
+  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes, atualizar_financas:baixaAtualizaFinancas(), taxa:taxa.valor, juros:taxa.juros, tipo_taxa:document.getElementById('f-baixa_tipo_diferenca')?.value });
   if(!baixa.ok) { toast(baixa.message,'error'); return; }
   toast(baixa.aviso||`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.${mensagemTaxaBaixa(baixa)}`,baixa.aviso?'error':'success');
   await loadItems();
@@ -632,7 +633,9 @@ function calcularTaxaBaixa(valorBaixa, liquidoInformado) {
 
 function mensagemTaxaBaixa(baixa) {
   const taxa = Number(baixa?.taxa||0), juros = Number(baixa?.juros||0), entrou = contasFmtMoeda(Number(baixa?.liquido||0));
-  if(taxa>0) return ` Taxa de ${contasFmtMoeda(taxa)} lançada no Finanças (entrou ${entrou}).`;
+  if(taxa>0) return baixa?.tipo_taxa==='desconto'
+    ? ` Desconto de ${contasFmtMoeda(taxa)} lançado no Finanças (entrou ${entrou}).`
+    : ` Taxa de ${contasFmtMoeda(taxa)} lançada no Finanças (entrou ${entrou}).`;
   if(juros>0) return ` Juros de ${contasFmtMoeda(juros)} lançados no Finanças (entrou ${entrou}).`;
   return '';
 }
@@ -725,7 +728,8 @@ function renderBaixaClienteContas() {
           <small id="baixa-cliente-conta-financas-aviso" style="display:block;color:var(--text3);margin-top:4px;">Consultando o Finanças...</small>
           <label class="form-label" style="margin-top:12px;">Valor que entrou na conta</label>
           <input class="form-input" type="number" step="0.01" id="baixa-cliente-liquido" placeholder="Opcional"/>
-          <small style="display:block;color:var(--text3);margin-top:4px;">Opcional. Ex.: baixa de 175,00 e entraram 160,00 = 15,00 de taxa (cartão); entraram 182,00 = 7,00 de juros por atraso.</small>
+          <select class="form-input form-select" id="baixa-cliente-tipo-diferenca" style="margin-top:6px;" title="Quando entrar menos que o valor da baixa"><option value="cartao">Se entrar menos: taxa de cartão</option><option value="desconto">Se entrar menos: desconto concedido</option></select>
+          <small style="display:block;color:var(--text3);margin-top:4px;">Opcional. Ex.: baixa de 175,00 e entraram 160,00 = 15,00 de taxa de cartão ou desconto; entraram 182,00 = 7,00 de juros por atraso.</small>
         </div>
       </div>
       <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:10px 0 14px;">
@@ -773,7 +777,7 @@ async function aplicarBaixaClienteContas() {
     `valor informado ${contasFmtMoeda(valorInformado)}`,
     observacoes
   ].filter(Boolean).join(' - ');
-  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote,taxa:taxa.valor,juros:taxa.juros},financeiro);
+  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote,taxa:taxa.valor,juros:taxa.juros,tipo_taxa:document.getElementById('baixa-cliente-tipo-diferenca')?.value},financeiro);
   if(!baixa.ok){toast(baixa.message,'error');return;}
   const totalAplicado=baixa.aplicado, qtd=baixa.qtd;
   restante=baixa.sobra;
