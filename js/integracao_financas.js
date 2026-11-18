@@ -228,6 +228,7 @@ async function alterarStatusMovimentoFinancas(idMovimento,status,dataEfetivacao)
 }
 
 async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
+  if(tabela==='contas_pagar'&&titulo&&typeof preservarBaixasContaPagar==='function'&&await preservarBaixasContaPagar(titulo))return;
   if(!titulo?.id_movimento_financas||!await empresaIntegraFinancas())return;
   const lista=await financasRequest(`movimentos?select=*&id_movimento=eq.${Number(titulo.id_movimento_financas)}&limit=1`),m=Array.isArray(lista)?lista[0]:null;
   if(!m)return;

@@ -118,8 +118,8 @@ async function renderDashboardContasPagar() {
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const amanha = new Date(hoje.getTime()+864e5);
   const seteDias = new Date(hoje.getTime()+7*864e5);
-  const pendentes = contas.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
-  const pagas = contas.filter(c=>c.status_pagamento === 'PAGO');
+  const pendentes = contas.filter(c=>contaPagarTemSaldo(c));
+  const pagas = contas.filter(c=>c.status_pagamento!=='CANCELADO'&&Number(c.valor_pago||0)>0);
   const range = contasPagarMesSelecionadoRange();
   const pendentesMes = pendentes.filter(c=>{ const d=String(c.data_vencimento||'').slice(0,10); return d>=range.inicio && d<range.fim; });
   const dataReferenciaPaga = c => String(contasPagarDataPagasModo === 'vencimento' ? c.data_vencimento : c.data_pagamento || '').slice(0,10);
@@ -234,13 +234,13 @@ function listarContasPagarDash(filtro) {
   const seteDias = new Date(hoje.getTime()+7*864e5);
   const range = contasPagarMesSelecionadoRange();
   let lista = [...items];
-  if(filtro==='pendente') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO');
-  else if(filtro==='pago') lista = lista.filter(c=>c.status_pagamento === 'PAGO');
-  else if(filtro==='pagar_mes') lista = lista.filter(c=>{ const d=String(c.data_vencimento||'').slice(0,10); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=range.inicio && d<range.fim; });
-  else if(filtro==='pago_mes') lista = lista.filter(c=>{ const d=String(contasPagarDataPagasModo === 'vencimento' ? c.data_vencimento : c.data_pagamento || '').slice(0,10); return c.status_pagamento === 'PAGO' && d>=range.inicio && d<range.fim; });
-  else if(filtro==='vencido') lista = lista.filter(c=>c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && contaPagarDateLocal(c.data_vencimento) < hoje);
-  else if(filtro==='hoje') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<amanha; });
-  else if(filtro==='7dias') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return c.status_pagamento !== 'PAGO' && c.status_pagamento !== 'CANCELADO' && d>=hoje && d<=seteDias; });
+  if(filtro==='pendente') lista = lista.filter(c=>contaPagarTemSaldo(c));
+  else if(filtro==='pago') lista = lista.filter(c=>contaPagarQuitada(c));
+  else if(filtro==='pagar_mes') lista = lista.filter(c=>{ const d=String(c.data_vencimento||'').slice(0,10); return contaPagarTemSaldo(c) && d>=range.inicio && d<range.fim; });
+  else if(filtro==='pago_mes') lista = lista.filter(c=>{ const d=String(contasPagarDataPagasModo === 'vencimento' ? c.data_vencimento : c.data_pagamento || '').slice(0,10); return c.status_pagamento!=='CANCELADO' && Number(c.valor_pago||0)>0 && d>=range.inicio && d<range.fim; });
+  else if(filtro==='vencido') lista = lista.filter(c=>contaPagarTemSaldo(c) && contaPagarDateLocal(c.data_vencimento) < hoje);
+  else if(filtro==='hoje') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return contaPagarTemSaldo(c) && d>=hoje && d<amanha; });
+  else if(filtro==='7dias') lista = lista.filter(c=>{ const d=contaPagarDateLocal(c.data_vencimento); return contaPagarTemSaldo(c) && d>=hoje && d<=seteDias; });
   const labels = {
     pagar_mes:`A pagar em ${range.label}`,
     pago_mes:`Pagas em ${range.label} por ${contasPagarDataPagasModo}`,
@@ -1453,62 +1453,8 @@ async function garantirMovimentoContaPagarFinancas(titulo,financeiro){
   catch(e){return {ok:false,message:e.message||String(e)};}
 }
 
-async function marcarContaPagarPaga() {
-  const valor = Number(document.getElementById('f-valor_pago')?.value||0) || Number(document.getElementById('f-valor_original')?.value||0);
-  const dataInformada = document.getElementById('f-data_pagamento')?.value;
-  const dataPagamento = dataInformada ? new Date(dataInformada) : new Date();
-  if(Number.isNaN(dataPagamento.getTime())) { toast('Informe uma data de pagamento válida.','error'); return; }
-  const atualizarFinancas=baixaAtualizaFinancas();
-  const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
-  const financeiro=await prepararIntegracaoBaixaContaPagar(conta,atualizarFinancas,dataPagamento.toISOString());
-  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
-  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{
-    status_pagamento:'PAGO',
-    valor_pago: valor,
-    data_pagamento: financeiro.dataPagamento,
-    meio_pagamento: document.getElementById('f-meio_pagamento')?.value||null,
-    ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
-  },{sincronizarFinancas:atualizarFinancas});
-  if(!res.ok){ toast('Erro ao marcar como pago.','error'); return; }
-  const sincronizacao=await garantirMovimentoContaPagarFinancas(res.data?.[0]||conta,financeiro);
-  if(!sincronizacao.ok){toast('Pagamento salvo, mas o Financas nao foi atualizado: '+sincronizacao.message,'error');await loadItems();openItem(currentId);return;}
-  toast(`Pagamento confirmado${atualizarFinancas?' e atualizado no Finanças':' sem atualizar o Finanças'}.`,'success');
-  await loadItems();
-  openItem(currentId);
-}
-
-async function marcarContaPagarPagaRapido(idConta, event) {
-  event?.stopPropagation();
-  const botao = event?.currentTarget;
-  const conta = items.find(c=>Number(c.id_conta_pagar)===Number(idConta));
-  const original = Number(conta?.valor_original||0);
-  const pagoAtual = Math.min(original, Math.max(0, Number(conta?.valor_pago||0)));
-  const saldo = Math.max(0, original-pagoAtual);
-  if(!conta || saldo<=0.005 || conta.status_pagamento==='PAGO') { toast('Esta conta já está paga.','info'); return; }
-  const fornecedor = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(conta.id_fornecedor));
-  const nome = fornecedor?.nome_fantasia || fornecedor?.razao_social || `Conta #${idConta}`;
-  const financeiro=await prepararIntegracaoBaixaContaPagar(conta,true,null,`Marcar como pago ${compraFmt(saldo)} de ${nome}?`);
-  if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
-  const atualizarFinancas=financeiro.atualizarFinancas;
-  if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
-  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${idConta}`,{
-    status_pagamento:'PAGO',
-    valor_pago:original,
-    data_pagamento:financeiro.dataPagamento,
-    meio_pagamento:conta.meio_pagamento||null,
-    ...(financeiro.ativa?{id_conta_financas:financeiro.contaId}:{})
-  },{sincronizarFinancas:atualizarFinancas});
-  if(!res.ok) {
-    if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
-    toast('Erro ao marcar como pago: '+(res.data?.message||'erro'),'error');
-    return;
-  }
-  toast(`Pagamento confirmado: ${compraFmt(saldo)}${atualizarFinancas?'':' (sem atualizar o Finanças)'}.`,'success');
-  const sincronizacao=await garantirMovimentoContaPagarFinancas(res.data?.[0]||conta,financeiro);
-  if(!sincronizacao.ok){toast('Pagamento salvo, mas o Financas nao foi atualizado: '+sincronizacao.message,'error');await renderDashboardContasPagar();return;}
-  currentId=null;
-  await renderDashboardContasPagar();
-}
+async function marcarContaPagarPaga(){return abrirBaixaContaPagar(currentId)}
+async function marcarContaPagarPagaRapido(idConta,event){return abrirBaixaContaPagar(idConta,event)}
 
 async function sincronizarContaPagaFinancas(idConta){
   const conta=items.find(x=>Number(x.id_conta_pagar)===Number(idConta));
@@ -1527,6 +1473,7 @@ async function sincronizarContaPagaFinancas(idConta){
 async function reativarContaPagar() {
   const conta=items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
   if(!conta)return toast('Conta não encontrada.','error');
+  try{const historico=await consultarHistoricoPagar(conta.id_conta_pagar);if(historico.length)return toast('Este titulo possui baixas individuais. Os pagamentos registrados devem ser preservados.','error');}catch(error){return toast('Nao foi possivel conferir o historico: '+error.message,'error');}
   if(!confirm('Reativar esta baixa? O valor pago e a data de pagamento serão removidos.'))return;
   const atualizarFinancas=baixaAtualizaFinancas();
   const res=await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,{status_pagamento:'PENDENTE',valor_pago:null,data_pagamento:null},{sincronizarFinancas:atualizarFinancas});

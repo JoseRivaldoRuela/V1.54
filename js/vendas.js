@@ -7,6 +7,27 @@ function historicoVendaMes(chave){return historicoMensalVendas().find(x=>x.mes==
 function historicosRanking(ano,mes,modo){return historicoMensalVendas().filter(x=>Number(x.mes.slice(0,4))===Number(ano)&&(modo==='ano'||Number(x.mes.slice(5,7))-1===Number(mes)));}
 function vendasSinteticasHistorico(registro){return registro?Array.from({length:registro.qtd},(_,i)=>({valor_final:i===0?registro.faturamento:0,status_entrega:'ENTREGUE',_historico:true})):[];}
 
+async function carregarItensDashboardVendas() {
+  for(let tentativa=0;tentativa<2;tentativa++) {
+    try {
+      const dados=await apiGet('venda_itens?select=id_venda,id_produto,quantidade,subtotal,produtos!fk_item_produto(nome_mercadoria)');
+      if(Array.isArray(dados))return dados;
+      throw dados||new Error('Resposta inválida ao carregar itens das vendas.');
+    } catch(erro) {
+      const temporario=erro instanceof TypeError || ['57014','53300','57P03','PGRST000','PGRST001','PGRST002'].includes(erro?.code);
+      if(tentativa===1 || !temporario)throw erro;
+    }
+  }
+}
+
+function renderErroDashboardVendas(erro) {
+  const body=document.getElementById('content-body');
+  body.innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div><p>Não foi possível carregar o painel de Vendas.</p><p data-erro-vendas></p><button type="button" class="btn btn-secondary" data-repetir-vendas>Tentar novamente</button></div>';
+  const mensagem=erro?.message||'O servidor não retornou os dados esperados.';
+  body.querySelector('[data-erro-vendas]').textContent=(erro?.code?`[${erro.code}] `:'')+mensagem;
+  body.querySelector('[data-repetir-vendas]').onclick=()=>renderDashboard();
+}
+
 async function renderDashboard() {
   const body = document.getElementById('content-body');
   body.innerHTML = '<div class="loading" style="padding:40px 0;justify-content:center;"><div class="spinner"></div> Carregando dashboard...</div>';
@@ -25,12 +46,27 @@ async function renderDashboard() {
   const fimMesAnterior = inicioMesRef;
   const labelMesRef = mesRef.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
 
-  const [todasVendas, itensTodos] = await Promise.all([
-    apiGet('vendas?select=id_venda,codigo_venda,data_venda,valor_final,valor_produtos,status_entrega,id_cliente,clientes(nome_fantasia,razao_social)&order=data_venda.desc'),
-    apiGet('venda_itens?select=id_venda,id_produto,quantidade,subtotal,produtos!fk_item_produto(nome_mercadoria)')
-  ]);
+  let todasVendas, itensTodos, erroItens=null;
+  try {
+    const [vendasResultado,itensResultado] = await Promise.allSettled([
+    typeof currentTab!=='undefined' && currentTab==='vendas' && typeof items!=='undefined' && Array.isArray(items) && items.length && items.every(v=>v.id_venda!=null)
+      ? Promise.resolve([...items])
+      : apiGet('vendas?select=*,clientes(nome_fantasia,razao_social)&order=status_entrega.asc,data_entrega.asc,id_venda.asc'),
+    carregarItensDashboardVendas()
+    ]);
+    if(vendasResultado.status==='rejected')throw vendasResultado.reason;
+    todasVendas=vendasResultado.value;
+    if(itensResultado.status==='fulfilled')itensTodos=itensResultado.value;
+    else erroItens=itensResultado.reason;
+  } catch(erro) {
+    renderErroDashboardVendas(erro);
+    return;
+  }
 
-  if(!Array.isArray(todasVendas)) { body.innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div><p>Erro ao carregar dados</p></div>'; return; }
+  if(!Array.isArray(todasVendas)) {
+    renderErroDashboardVendas(todasVendas);
+    return;
+  }
 
   const itens = Array.isArray(itensTodos) ? itensTodos : [];
 
@@ -258,7 +294,7 @@ async function renderDashboard() {
     <div class="dash-chart-box" style="margin-bottom:20px;">
       <div class="dash-chart-title"><span>📦 Melhores Produtos</span><span style="font-size:11px;color:var(--text2);font-family:var(--mono);text-transform:capitalize;">${labelRanking}</span></div>
       <div class="dash-two-col" id="dash-produtos">
-        ${topProdutos.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;grid-column:1/-1;">Nenhum dado</div>' :
+        ${erroItens ? '<div role="status" style="grid-column:1/-1;"><p>Não foi possível carregar o ranking de produtos.</p><p data-erro-itens-dashboard></p><button type="button" class="btn btn-secondary" onclick="renderDashboard()">Tentar novamente</button></div>' : topProdutos.length === 0 ? '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px;grid-column:1/-1;">Nenhum dado</div>' :
         topProdutos.map((p,i) => {
           const baseRanking=rankingHistoricoSelecionado.length?topProdutos[0].qtd:topProdutos[0].total;
           const valorRanking=rankingHistoricoSelecionado.length?p.qtd:p.total;
@@ -277,6 +313,8 @@ async function renderDashboard() {
         }).join('')}
       </div>
     </div>`;
+
+  if(erroItens)body.querySelector('[data-erro-itens-dashboard]').textContent=(erroItens?.code?`[${erroItens.code}] `:'')+(erroItens?.message||'Resposta inválida do servidor.');
 
   // Renderizar gráfico
   setTimeout(() => {
@@ -1359,12 +1397,15 @@ async function imprimirTicketVenda(idVenda, acao = '') {
     const sub = Number(i.subtotal || (qtd*(preco-Number(i.desconto_item||0))));
     return `- ${nome} | Qtd: ${qtd} | Unit: ${fmt(preco)} | Total: ${fmt(sub)}`;
   }).join('\n');
+  const dataVendaTicket = venda.data_venda ? new Date(venda.data_venda).toLocaleDateString('pt-BR') : '-';
+  const dataEntregaTicket = venda.data_entrega ? new Date(venda.data_entrega).toLocaleDateString('pt-BR') : 'Pendente';
+  const impressoEm = new Date().toLocaleString('pt-BR');
   const ticketTexto = [
     'JR Representações',
     `Pedido: ${venda.codigo_venda||'#'+idVenda}`,
     `Cliente: ${cliente}`,
-    `Venda: ${venda.data_venda?new Date(venda.data_venda).toLocaleString('pt-BR'):'-'}`,
-    `Entrega: ${venda.data_entrega?new Date(venda.data_entrega).toLocaleString('pt-BR'):'Pendente'}`,
+    `Venda: ${dataVendaTicket}`,
+    `Entrega: ${dataEntregaTicket}`,
     `Vencimento: ${vencimento}`,
     `Pagamento: ${venda.meio_pagamento||'-'} - ${statusFin}`,
     '',
@@ -1383,8 +1424,8 @@ async function imprimirTicketVenda(idVenda, acao = '') {
     titulo: 'Ticket de Venda',
     codigo: venda.codigo_venda || '#'+idVenda,
     cliente,
-    venda: venda.data_venda ? new Date(venda.data_venda).toLocaleString('pt-BR') : '-',
-    entrega: venda.data_entrega ? new Date(venda.data_entrega).toLocaleString('pt-BR') : 'Pendente',
+    venda: dataVendaTicket,
+    entrega: dataEntregaTicket,
     vencimento,
     pagamento: `${venda.meio_pagamento||'-'} - ${statusFin}`,
     subtotal: fmt(subtotal),
@@ -1393,7 +1434,7 @@ async function imprimirTicketVenda(idVenda, acao = '') {
     desconto: fmt(desconto),
     total: fmt(total),
     observacoes: venda.observacoes || '',
-    impressoEm: new Date().toLocaleString('pt-BR'),
+    impressoEm,
     itens: itens.map(i => {
       const nome = i.nome_produto || i.produtos?.nome_mercadoria || 'Produto';
       const qtd = Number(i.quantidade||0);
@@ -1448,6 +1489,16 @@ async function imprimirTicketVenda(idVenda, acao = '') {
         @media print{html,body{background:#fff;margin:0;padding:0}.ticket{display:none}.print-image{display:block;width:100%;height:auto} @page{margin:0}}
       </style>
       <script>
+        function voltarParaVenda(){
+          if(window.opener && !window.opener.closed){
+            window.opener.focus();
+            window.close();
+          }
+          if(!window.closed) location.replace('index.html');
+        }
+        history.replaceState({ticket:true},'');
+        history.pushState({ticket:true},'');
+        window.addEventListener('popstate',voltarParaVenda);
         const ticketData = ${JSON.stringify(ticketData)};
         function wrapText(ctx, text, maxWidth){
           const words = String(text || '').split(/\\s+/).filter(Boolean);
@@ -1752,12 +1803,13 @@ async function imprimirTicketVenda(idVenda, acao = '') {
     </head>
     <body>
       <div class="ticket">
+        <button class="no-print" onclick="voltarParaVenda()" style="min-height:44px;padding:10px 16px;margin-bottom:12px;cursor:pointer;">← Voltar à venda</button>
         <h1>JR Representações</h1>
         <div class="sub">Ticket de Venda</div>
         <div class="row"><strong>Pedido</strong><span>${venda.codigo_venda||'#'+idVenda}</span></div>
         <div class="row"><strong>Cliente</strong><span>${cliente}</span></div>
-        <div class="row"><strong>Venda</strong><span>${venda.data_venda?new Date(venda.data_venda).toLocaleString('pt-BR'):'-'}</span></div>
-        <div class="row"><strong>Entrega</strong><span>${venda.data_entrega?new Date(venda.data_entrega).toLocaleString('pt-BR'):'Pendente'}</span></div>
+        <div class="row"><strong>Venda</strong><span>${dataVendaTicket}</span></div>
+        <div class="row"><strong>Entrega</strong><span>${dataEntregaTicket}</span></div>
         <div class="row"><strong>Vencimento</strong><span>${vencimento}</span></div>
         <div class="row"><strong>Pagamento</strong><span>${venda.meio_pagamento||'-'} · ${statusFin}</span></div>
         <div class="sep"></div>
@@ -1773,7 +1825,7 @@ async function imprimirTicketVenda(idVenda, acao = '') {
         <div class="row total"><span>Total</span><span>${fmt(total)}</span></div>
         ${venda.observacoes?`<div class="sep"></div><strong>Observações</strong><div class="obs">${venda.observacoes}</div>`:''}
         <div class="sep"></div>
-        <div class="sub">Impresso em ${new Date().toLocaleString('pt-BR')}</div>
+        <div class="sub">Impresso em ${impressoEm}</div>
         <div class="actions no-print">
           <button class="primary" onclick="imprimirImagem()">Imprimir</button>
           <button onclick="compartilharTicket()">Compartilhar imagem</button>

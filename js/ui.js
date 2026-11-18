@@ -52,12 +52,61 @@ function setActiveMenu(tab) {
   if(tab==='usuarios') document.getElementById('mbtn-usuarios')?.classList.add('active');
 }
 
+// Histórico das telas para o botão Voltar do celular.
+let restaurandoNavegacao = false;
+let navegacaoAtual = null;
+let navegacaoVista = null;
+let navegacaoModal = null;
+let ignorarRetornoModal = false;
+function registrarNavegacao() {
+  if(restaurandoNavegacao)return;
+  const tela={tab:currentTab,id:currentId,novo:isNew,vista:navegacaoVista};
+  if(JSON.stringify(tela)===JSON.stringify(navegacaoAtual))return;
+  if(!navegacaoAtual)history.replaceState({jrVendas:true,raiz:true},'');
+  history.pushState({jrVendas:true,tela},'');
+  navegacaoAtual=tela;
+}
+window.addEventListener('popstate',async e=>{
+  if(ignorarRetornoModal) { ignorarRetornoModal=false; return; }
+  if(!navegacaoAtual)return;
+  if(navegacaoModal) {
+    const modal=navegacaoModal;
+    navegacaoModal=null;
+    const cancelar=[...modal.querySelectorAll('button')].find(b=>/cancelar|voltar|fechar|agora n[aã]o/i.test(b.textContent)) || modal.querySelector('.modal-close');
+    if(cancelar)cancelar.click();
+    else if(modal.id==='cnpj-modal')closeCNPJModal();
+    else modal.remove();
+    return;
+  }
+  if(!podeSairDoFormulario()) {
+    history.pushState({jrVendas:true,tela:navegacaoAtual},'');
+    return;
+  }
+  const tela=e.state?.tela || {tab:'vendas',id:null,novo:false};
+  restaurandoNavegacao=true;
+  try {
+    closeMenus();
+    closeSidebar();
+    await switchTab(tela.tab);
+    if(tela.vista && typeof window[tela.vista.nome]==='function')await window[tela.vista.nome](...tela.vista.args);
+    else if(tela.novo)openNew();
+    else if(tela.id!==null)openItem(tela.id);
+    navegacaoVista=tela.vista||null;
+    navegacaoAtual={tab:currentTab,id:currentId,novo:isNew,vista:navegacaoVista};
+  } finally {
+    restaurandoNavegacao=false;
+    if(!e.state?.tela)history.pushState({jrVendas:true,tela:navegacaoAtual},'');
+  }
+});
+
 // TAB SWITCH
 async function switchTab(tab) {
   if(window.event?.isTrusted&&tab!==currentTab&&!podeSairDoFormulario())return false;
   if((tab==='usuarios' || tab==='importador_tickets') && !isAdmin){ toast('Acesso restrito ao administrador.','error'); return; }
   if(tab==='empresas' && !isSuperAdminJr){ toast('Acesso exclusivo ao administrador da empresa JR.','error'); return; }
   currentTab=tab; currentId=null; isNew=false; formularioAlterado=false;
+  navegacaoVista=null;
+  registrarNavegacao();
   const cfg=tabConfig[tab];
   document.getElementById('search-input').oninput = tab==='ajuda' ? filtrarAjuda : filterItems;
   document.getElementById('search-input').placeholder = tab==='ajuda' ? 'Buscar no help...' : 'Buscar...';
@@ -704,7 +753,7 @@ async function renderList() {
     } else if(currentTab==='contas_pagar'){
       const venc = dataPuraLocal(c.data_vencimento);
       const hoje = new Date();
-      const atrasado = c.status_pagamento!=='PAGO' && venc < hoje;
+      const atrasado = contaPagarTemSaldo(c) && venc < hoje;
       const forn = cacheFornecedores.find(f=>Number(f.id_fornecedor)===Number(c.id_fornecedor));
       nome = forn?.nome_fantasia||forn?.razao_social||`Fornecedor #${c.id_fornecedor}`;
       const docCompra = c.compras?.codigo_compra || (c.id_compra ? '#'+c.id_compra : '#'+c.id_conta_pagar);
@@ -719,11 +768,11 @@ async function renderList() {
       sub = `Doc: ${docCompra} (${dataCompra}) - Venc: ${dataPuraBR(c.data_vencimento)}${pagamentoInfo} - Título: ${fmtResumoFinanceiro(valorTitulo)} - Pago: ${fmtResumoFinanceiro(valorPago)} - Em aberto: ${fmtResumoFinanceiro(saldoPagar)}`;
       if(c.status_pagamento==='PAGO'&&contaBaixaFinancas(c))sub += ` - Pago por: ${textoSeguroFinancas(contaBaixaFinancas(c))}`;
       valorDestaque = `<div style="margin-top:3px;font-family:var(--mono);font-size:11px;font-weight:600;color:${saldoPagar > 0.005 ? 'var(--warn)' : 'var(--accent)'};">Parcela ${parcelaInfo}: ${fmtResumoFinanceiro(valorTitulo)} <span style="font-weight:400;color:var(--text3);">• Total: ${fmtResumoFinanceiro(totalGeralTitulo)} • Em aberto: ${fmtResumoFinanceiro(saldoPagar)}</span></div>`;
-      const sc = c.status_pagamento==='PAGO'?'on':atrasado?'vencido':'warn';
-      const slabel = c.status_pagamento==='PAGO'?'PAGO':atrasado?'VENCIDO':'PENDENTE';
+      const sc = contaPagarQuitada(c)?'on':atrasado?'vencido':'warn';
+      const slabel = c.status_pagamento==='CANCELADO'?'CANCELADO':contaPagarQuitada(c)?'PAGO':valorPago>0?'PARCIAL':atrasado?'VENCIDO':'PENDENTE';
       pills = `<span class="pill ${sc}">${slabel}</span>`;
       const btnPagar = saldoPagar > 0.005 && c.status_pagamento!=='CANCELADO'
-        ? `<button type="button" onclick="marcarContaPagarPagaRapido(${c.id_conta_pagar},event)" style="background:rgba(0,229,160,.12);border:1px solid rgba(0,229,160,.35);border-radius:6px;color:var(--accent);padding:4px 7px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">✓ Pago</button>`
+        ? `<button type="button" onclick="marcarContaPagarPagaRapido(${c.id_conta_pagar},event)" style="background:rgba(0,229,160,.12);border:1px solid rgba(0,229,160,.35);border-radius:6px;color:var(--accent);padding:4px 7px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">Baixar valor</button>`
         : '';
       const btnResumoCompra = c.id_compra ? `<button type="button" onclick="mostrarResumoCompraConta(${c.id_compra},event)" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--accent2);padding:4px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">Resumo compra</button>` : '';
       return `<div class="item-card ${currentId===c[cfg.id]?'active':''}" onclick="openItem(${c[cfg.id]})">
@@ -789,6 +838,7 @@ async function renderList() {
 function openItem(id) {
   id = typeof id === 'string' ? parseInt(id) : id;
   if(window.event?.isTrusted&&!podeSairDoFormulario())return;
+  navegacaoVista=null;
   isNew=false; currentId=id; formularioAlterado=false;
   const cfg=tabConfig[currentTab];
   const c=items.find(x=>Number(x[cfg.id])===Number(id));
@@ -811,17 +861,20 @@ function openItem(id) {
   const sub=c.data_cadastro?`cadastrado em ${new Date(c.data_cadastro).toLocaleDateString('pt-BR')}`:'';
   showHeader(titulo,`#${id}`,sub);
   renderForm(c);
+  registrarNavegacao();
   closeSidebar();
 }
 
 function openNew() {
   if(window.event?.isTrusted&&!podeSairDoFormulario())return;
+  navegacaoVista=null;
   if(currentTab==='empresas') { abrirNovaEmpresa(); return; }
   if(currentTab==='compras') { abrirEscolhaTipoEntradaCompra(); return; }
   isNew=true; currentId=null; formularioAlterado=false;
   renderList();
   showHeader('Novo '+tabConfig[currentTab].label,'novo','');
   renderForm(null);
+  registrarNavegacao();
   closeSidebar();
 }
 
@@ -834,7 +887,9 @@ function showHeader(t,id,sub) {
 
 async function cancelForm() {
   if(window.event?.isTrusted&&!podeSairDoFormulario())return;
+  navegacaoVista=null;
   currentId=null; isNew=false; formularioAlterado=false; renderList();
+  registrarNavegacao();
   document.getElementById('content-header').style.display='none';
   if(currentTab==='empresas') {
     await renderEmpresasAdmin();
@@ -1031,6 +1086,65 @@ async function init(){
 }
 
 
+// Telas secundárias também fazem parte do histórico, mesmo sem trocar de aba.
+function inicializarNavegacaoCompleta() {
+  const telas=[
+    'renderDashboard','renderComparativoVendas','renderRankingMesesVendas',
+    'mostrarResumoHistoricoMes','mostrarDetalheVendas',
+    'renderDashboardCompras','renderRankingMesesCompras','listarComprasDash','mostrarDetalheCompras',
+    'abrirEscolhaTipoEntradaCompra','abrirEntradaBasicaCompra','abrirCadastroNfeCompletaCompra',
+    'renderConciliacaoNota','renderDashboardContasPagar','listarContasPagarDash',
+    'renderDashboardContas','renderComparativoContas','listarContas',
+    'renderBaixaClienteContas','renderAuditoriaBaixasContas',
+    'renderDashboardClientes','renderDashboardFornecedores','renderDashboardProdutos',
+    'renderComparativoProdutos','renderUnificarMercadorias','renderQuebraEstoque','renderKardex',
+    'renderEmpresasAdmin','abrirNovaEmpresa','abrirEmpresaAdmin',
+    'renderCentralAjuda','selecionarModuloAjuda','renderConteudoAjuda','abrirAreaChamados',
+    'renderImportadorTickets'
+  ];
+  let nivel=0;
+  for(const nome of telas) {
+    const original=window[nome];
+    if(typeof original!=='function')continue;
+    window[nome]=function(...args) {
+      const principal=nivel===0;
+      nivel++;
+      const concluir=()=>{
+        nivel--;
+        if(!principal)return;
+        navegacaoVista={nome,args};
+        registrarNavegacao();
+      };
+      try {
+        const resultado=original.apply(this,args);
+        if(resultado && typeof resultado.then==='function')return resultado.finally(concluir);
+        concluir();
+        return resultado;
+      } catch(erro) {
+        nivel--;
+        throw erro;
+      }
+    };
+  }
+  // Modais usam seus próprios botões de cancelamento para concluir Promises pendentes.
+  new MutationObserver(()=>{
+    const visiveis=[...document.querySelectorAll('.modal-overlay')].filter(el=>getComputedStyle(el).display!=='none');
+    const modal=visiveis.at(-1)||null;
+    if(navegacaoModal && !visiveis.includes(navegacaoModal)) {
+      navegacaoModal=null;
+      if(history.state?.modal) {
+        ignorarRetornoModal=true;
+        history.back();
+      }
+      return;
+    }
+    if(modal && modal!==navegacaoModal && !restaurandoNavegacao) {
+      navegacaoModal=modal;
+      history.pushState({jrVendas:true,tela:navegacaoAtual,modal:true},'');
+    }
+  }).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});
+}
+inicializarNavegacaoCompleta();
 init();
 function ativarSeletorPesquisavel(selectId, placeholder='Digite para buscar...') {
   const select=document.getElementById(selectId);
