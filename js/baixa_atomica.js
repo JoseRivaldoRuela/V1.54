@@ -30,6 +30,13 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
     if(taxa>=totalItens) return {ok:false,message:'A taxa deve ser menor que o total baixado ('+totalItens.toFixed(2).replace('.',',')+').'};
     requisicao.p_taxa = taxa;
   }
+  const juros = Math.round(Number(opcoes.juros||0)*100)/100;
+  if(juros<0) return {ok:false,message:'Juros invalidos.'};
+  if(juros>0) {
+    if(taxa>0) return {ok:false,message:'Informe taxa ou juros, nao os dois na mesma baixa.'};
+    if(financeiro.ativa!==true) return {ok:false,message:'Para lancar os juros, marque Atualizar o Financas.'};
+    requisicao.p_juros = juros;
+  }
   const chave = 'baixa_atomica_pendente_'+sessaoAtual()?.empresa_id+'_'+sessaoAtual()?.id_usuario;
   let pendente;
   try { pendente=JSON.parse(sessionStorage.getItem(chave)||'null'); }
@@ -50,8 +57,8 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
       if(banco) sessionStorage.removeItem(chave);
       const instalar = /PGRST202|42883/.test(codigo);
       return {ok:false,message:instalar
-        ? (taxa>0
-          ? 'Baixa com taxa bloqueada: rode a SQL 60_baixa_receber_com_taxa no Supabase. Nada foi baixado.'
+        ? (taxa>0||juros>0
+          ? 'Baixa com taxa/juros bloqueada: rode a SQL 61_baixa_receber_com_juros no Supabase. Nada foi baixado.'
           : 'Baixa bloqueada: instale a SQL baixa_receber_atomica no Supabase. Nenhum recebimento foi enviado pelo fluxo antigo.')
         : (res.data?.message||'Erro ao executar a baixa.')+(banco?' Nenhuma alteracao desta baixa foi confirmada.':' Resultado nao confirmado. Confira antes de repetir.')};
     }

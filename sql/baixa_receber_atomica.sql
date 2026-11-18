@@ -17,13 +17,15 @@ create policy escopo_operacao_baixa on public.baixas_receber_operacoes
   with check (empresa_id=public.app_empresa_atual() and id_usuario=public.app_usuario_atual());
 grant select,insert,update on public.baixas_receber_operacoes to anon,authenticated;
 
--- Versao com taxa (cartao), igual a Financas/sql/60_baixa_receber_com_taxa.sql
+-- Versao com taxa (cartao) e juros (atraso), igual a Financas/sql/61_baixa_receber_com_juros.sql
 DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT);
+DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT,NUMERIC,BIGINT);
 CREATE OR REPLACE FUNCTION public.baixar_contas_receber_atomico(
     p_id_operacao UUID,p_itens JSONB,p_data_baixa TIMESTAMPTZ,
     p_atualizar_financas BOOLEAN,p_id_conta_financas BIGINT,
     p_id_categoria BIGINT,p_observacoes TEXT DEFAULT NULL,
-    p_taxa NUMERIC DEFAULT 0,p_id_categoria_taxa BIGINT DEFAULT NULL
+    p_taxa NUMERIC DEFAULT 0,p_id_categoria_taxa BIGINT DEFAULT NULL,
+    p_juros NUMERIC DEFAULT 0,p_id_categoria_juros BIGINT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql SECURITY INVOKER
 SET search_path=public,financas,pg_temp AS $baixa$
@@ -58,6 +60,9 @@ DECLARE
     taxa_categoria BIGINT:=p_id_categoria_taxa;
     taxa_movimento BIGINT;
     codigos TEXT[]:='{}';
+    juros NUMERIC:=round(COALESCE(p_juros,0),2);
+    juros_categoria BIGINT:=p_id_categoria_juros;
+    juros_movimento BIGINT;
 BEGIN
     IF empresa IS NULL OR usuario IS NULL THEN RAISE EXCEPTION 'Sessao invalida ou expirada'; END IF;
     IF p_id_operacao IS NULL OR p_data_baixa IS NULL
@@ -70,7 +75,8 @@ BEGIN
     requisicao:=jsonb_build_object('itens',p_itens,'data',p_data_baixa,
         'integrar',p_atualizar_financas,'conta',p_id_conta_financas,
         'categoria',p_id_categoria,'observacoes',p_observacoes)
-        ||CASE WHEN taxa<>0 THEN jsonb_build_object('taxa',taxa,'categoria_taxa',p_id_categoria_taxa) ELSE '{}'::JSONB END;
+        ||CASE WHEN taxa<>0 THEN jsonb_build_object('taxa',taxa,'categoria_taxa',p_id_categoria_taxa) ELSE '{}'::JSONB END
+        ||CASE WHEN juros<>0 THEN jsonb_build_object('juros',juros,'categoria_juros',p_id_categoria_juros) ELSE '{}'::JSONB END;
     INSERT INTO public.baixas_receber_operacoes(id_operacao,empresa_id,id_usuario,requisicao)
         VALUES(p_id_operacao,empresa,usuario,requisicao) ON CONFLICT DO NOTHING;
     SELECT * INTO operacao FROM public.baixas_receber_operacoes
@@ -87,6 +93,11 @@ BEGIN
     IF taxa<0 THEN RAISE EXCEPTION 'O valor liquido nao pode ser maior que o valor da baixa'; END IF;
     IF taxa>0 AND integrado IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'A taxa so pode ser lancada com a opcao Atualizar o Financas marcada';
+    END IF;
+    IF juros<0 THEN RAISE EXCEPTION 'Juros invalidos'; END IF;
+    IF juros>0 AND taxa>0 THEN RAISE EXCEPTION 'Informe taxa ou juros, nao os dois na mesma baixa'; END IF;
+    IF juros>0 AND integrado IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION 'Os juros so podem ser lancados com a opcao Atualizar o Financas marcada';
     END IF;
     IF integrado THEN
         PERFORM 1 FROM financas.contas WHERE id_empresa=empresa AND id_conta=p_id_conta_financas
@@ -262,12 +273,47 @@ BEGIN
             RAISE EXCEPTION 'O Financas nao confirmou o lancamento da taxa';
         END IF;
     END IF;
+    -- Juros por atraso: entrada adicional na mesma conta e data, dentro desta transacao.
+    IF juros>0 THEN
+        IF juros_categoria IS NULL THEN
+            SELECT id_categoria INTO juros_categoria FROM financas.categorias
+                WHERE id_empresa=empresa AND ativo AND uso='entrada'
+                  AND lower(trim(nome)) IN ('juros recebidos','juros por atraso','juros')
+                ORDER BY id_categoria LIMIT 1;
+            IF juros_categoria IS NULL THEN
+                INSERT INTO financas.categorias(nome,uso,tipo,cor,descricao,ativo)
+                    VALUES('Juros recebidos','entrada',NULL,'#4dd0e1','Juros recebidos por atraso de clientes',TRUE)
+                    RETURNING id_categoria INTO juros_categoria;
+            END IF;
+        END IF;
+        PERFORM 1 FROM financas.categorias WHERE id_empresa=empresa
+            AND id_categoria=juros_categoria AND ativo AND uso='entrada';
+        IF NOT FOUND THEN RAISE EXCEPTION 'Categoria dos juros invalida ou indisponivel'; END IF;
+        argumentos:=jsonb_build_object(
+            'p_tipo','entrada','p_id_conta',p_id_conta_financas,'p_id_conta_destino',NULL,
+            'p_valor',juros,'p_descricao','Juros por atraso '||COALESCE(NULLIF(array_to_string(codigos,', '),''),'recebimento'),
+            'p_data_movimento',data_local,'p_data_vencimento',data_local,'p_data_efetivacao',data_local,
+            'p_id_categoria',juros_categoria,'p_status','efetivado',
+            'p_documento','JUROS-CR-'||baixa_id,'p_observacoes',p_observacoes);
+        SELECT 'select to_jsonb(financas.lancar_movimento('||
+            string_agg(format('%I => %L',key,value #>> '{}'),', ')||'))'
+            INTO chamada FROM jsonb_each(argumentos);
+        EXECUTE chamada INTO retorno;
+        IF jsonb_typeof(retorno)='array' THEN retorno:=retorno->0; END IF;
+        juros_movimento:=COALESCE(retorno->>'id_movimento',retorno->>'p_id_movimento',retorno #>> '{}')::BIGINT;
+        IF juros_movimento IS NULL OR NOT EXISTS(SELECT 1 FROM financas.movimentos m
+            WHERE m.id_empresa=empresa AND m.id_movimento=juros_movimento AND m.id_conta=p_id_conta_financas
+              AND m.tipo='entrada' AND m.status='efetivado' AND m.valor=juros
+              AND m.data_efetivacao=data_local AND m.documento='JUROS-CR-'||baixa_id) THEN
+            RAISE EXCEPTION 'O Financas nao confirmou o lancamento dos juros';
+        END IF;
+    END IF;
     retorno:=jsonb_build_object('ok',TRUE,'aplicado',total,'qtd',jsonb_array_length(resultados),'titulos',resultados,
-        'taxa',taxa,'liquido',total-taxa,'id_movimento_taxa',taxa_movimento);
+        'taxa',taxa,'juros',juros,'liquido',total-taxa+juros,'id_movimento_taxa',taxa_movimento,'id_movimento_juros',juros_movimento);
     UPDATE public.baixas_receber_operacoes SET resultado=retorno WHERE id_operacao=p_id_operacao;
     RETURN retorno;
 END $baixa$;
-revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint) from public;
-grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint) to anon,authenticated;
+revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint) from public;
+grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint,numeric,bigint) to anon,authenticated;
 notify pgrst, 'reload schema';
 commit;
