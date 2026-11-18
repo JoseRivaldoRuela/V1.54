@@ -249,6 +249,7 @@ async function renderFormConta(c) {
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Valor da baixa</label><input class="form-input" type="number" step="0.01" id="f-baixa_valor" value="${saldoAberto.toFixed(2)}" placeholder="0,00"/></div>
       <div class="form-group"><label class="form-label">Data da baixa</label><input class="form-input" type="datetime-local" id="f-baixa_data" value="${baixaDataPadrao}"/></div>
+      <div class="form-group"><label class="form-label">Valor líquido na conta (cartão)</label><input class="form-input" type="number" step="0.01" id="f-baixa_liquido" placeholder="Opcional"/><small style="display:block;color:var(--text3);margin-top:2px;">Se cair menos que o valor da baixa, a diferença vira saída de taxa no Finanças.</small></div>
       <div class="form-group full"><label class="form-label">Observacao da baixa</label><input class="form-input" id="f-baixa_obs" placeholder="Ex: pagamento parcial, comprovante..."/></div>
     </div>` : ''}
     ${c && Number(c.valor_recebido||0)===0 && c.status_recebimento!=='RECEBIDO' ? `
@@ -602,11 +603,29 @@ async function baixarContaParcial() {
   const meio = document.getElementById('f-meio_pagamento')?.value || conta?.meio_pagamento || null;
   const observacoes = document.getElementById('f-baixa_obs')?.value?.trim() || null;
   const data_baixa = dataInput ? new Date(dataInput).toISOString() : new Date().toISOString();
-  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes, atualizar_financas:baixaAtualizaFinancas() });
+  const taxa = calcularTaxaBaixa(valor, document.getElementById('f-baixa_liquido')?.value);
+  if(!taxa.ok) { toast(taxa.message,'error'); return; }
+  const baixa = await aplicarBaixaContaReceber(conta, valor, { data_baixa, meio_pagamento: meio, observacoes, atualizar_financas:baixaAtualizaFinancas(), taxa:taxa.valor });
   if(!baixa.ok) { toast(baixa.message,'error'); return; }
-  toast(baixa.aviso||`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.`,baixa.aviso?'error':'success');
+  toast(baixa.aviso||`Baixa de ${contasFmtMoeda(baixa.aplicado)} registrada.${mensagemTaxaBaixa(baixa)}`,baixa.aviso?'error':'success');
   await loadItems();
   openItem(currentId);
+}
+
+// Valor liquido (ex.: cartao): a diferenca para o valor da baixa vira taxa no Financas.
+function calcularTaxaBaixa(valorBaixa, liquidoInformado) {
+  const texto = String(liquidoInformado ?? '').trim();
+  if(!texto) return {ok:true,valor:0};
+  const liquido = Math.round(Number(texto.replace(',','.'))*100)/100;
+  const valor = Math.round(Number(valorBaixa||0)*100)/100;
+  if(!Number.isFinite(liquido)||liquido<=0) return {ok:false,message:'Informe um valor liquido maior que zero ou deixe o campo vazio.'};
+  if(liquido>valor) return {ok:false,message:'O valor liquido nao pode ser maior que o valor da baixa.'};
+  return {ok:true,valor:Math.round((valor-liquido)*100)/100};
+}
+
+function mensagemTaxaBaixa(baixa) {
+  const taxa = Number(baixa?.taxa||0);
+  return taxa>0 ? ` Taxa de ${contasFmtMoeda(taxa)} lançada no Finanças (líquido ${contasFmtMoeda(Number(baixa.liquido||0))}).` : '';
 }
 
 function contasAbertasOrdenadas(lista) {
@@ -695,6 +714,9 @@ function renderBaixaClienteContas() {
           <label class="form-label">Conta do Finanças *</label>
           <select class="form-input form-select" id="baixa-cliente-conta-financas" disabled><option value="">Carregando contas...</option></select>
           <small id="baixa-cliente-conta-financas-aviso" style="display:block;color:var(--text3);margin-top:4px;">Consultando o Finanças...</small>
+          <label class="form-label" style="margin-top:12px;">Valor líquido na conta (cartão)</label>
+          <input class="form-input" type="number" step="0.01" id="baixa-cliente-liquido" placeholder="Opcional"/>
+          <small style="display:block;color:var(--text3);margin-top:4px;">Ex.: venda de 175,00 que cai 160,00: informe 160,00 e os 15,00 entram como saída de taxa.</small>
         </div>
       </div>
       <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:10px 0 14px;">
@@ -735,18 +757,20 @@ async function aplicarBaixaClienteContas() {
   if(!financeiro.ok){if(!financeiro.cancelada)toast(financeiro.message,'error');return;}
 
   const valorInformado = restante;
+  const taxa = atualizarFinancas ? calcularTaxaBaixa(valorInformado, document.getElementById('baixa-cliente-liquido')?.value) : {ok:true,valor:0};
+  if(!taxa.ok) { toast(taxa.message,'error'); return; }
   const obsLote = [
     'Baixa por cliente',
     `valor informado ${contasFmtMoeda(valorInformado)}`,
     observacoes
   ].filter(Boolean).join(' - ');
-  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote},financeiro);
+  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote,taxa:taxa.valor},financeiro);
   if(!baixa.ok){toast(baixa.message,'error');return;}
   const totalAplicado=baixa.aplicado, qtd=baixa.qtd;
   restante=baixa.sobra;
 
   const sobraMsg = restante > 0.005 ? ` Sobra nao aplicada: ${contasFmtMoeda(restante)}.` : '';
-  toast(`Baixado ${contasFmtMoeda(totalAplicado)} em ${qtd} conta(s).${sobraMsg}`,'success');
+  toast(`Baixado ${contasFmtMoeda(totalAplicado)} em ${qtd} conta(s).${sobraMsg}${mensagemTaxaBaixa(baixa)}`,'success');
   await loadItems();
   await renderDashboardContas();
   } finally {

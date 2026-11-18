@@ -22,6 +22,14 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
   const requisicao = {p_itens:itens,p_data_baixa:opcoes.data_baixa||new Date().toISOString(),
     p_atualizar_financas:financeiro.ativa===true,p_id_conta_financas:financeiro.contaId||null,
     p_id_categoria:financeiro.integracao?.categoria?.id_categoria||null,p_observacoes:opcoes.observacoes||null};
+  const taxa = Math.round(Number(opcoes.taxa||0)*100)/100;
+  if(taxa<0) return {ok:false,message:'O valor liquido nao pode ser maior que o valor da baixa.'};
+  if(taxa>0) {
+    if(financeiro.ativa!==true) return {ok:false,message:'Para lancar a taxa, marque Atualizar o Financas.'};
+    const totalItens = Math.round(itens.reduce((s,i)=>s+i.valor,0)*100)/100;
+    if(taxa>=totalItens) return {ok:false,message:'A taxa deve ser menor que o total baixado ('+totalItens.toFixed(2).replace('.',',')+').'};
+    requisicao.p_taxa = taxa;
+  }
   const chave = 'baixa_atomica_pendente_'+sessaoAtual()?.empresa_id+'_'+sessaoAtual()?.id_usuario;
   let pendente;
   try { pendente=JSON.parse(sessionStorage.getItem(chave)||'null'); }
@@ -42,7 +50,9 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
       if(banco) sessionStorage.removeItem(chave);
       const instalar = /PGRST202|42883/.test(codigo);
       return {ok:false,message:instalar
-        ? 'Baixa bloqueada: instale a SQL baixa_receber_atomica no Supabase. Nenhum recebimento foi enviado pelo fluxo antigo.'
+        ? (taxa>0
+          ? 'Baixa com taxa bloqueada: rode a SQL 60_baixa_receber_com_taxa no Supabase. Nada foi baixado.'
+          : 'Baixa bloqueada: instale a SQL baixa_receber_atomica no Supabase. Nenhum recebimento foi enviado pelo fluxo antigo.')
         : (res.data?.message||'Erro ao executar a baixa.')+(banco?' Nenhuma alteracao desta baixa foi confirmada.':' Resultado nao confirmado. Confira antes de repetir.')};
     }
     const resultado = res.data;

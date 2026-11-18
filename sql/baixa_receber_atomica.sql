@@ -17,10 +17,13 @@ create policy escopo_operacao_baixa on public.baixas_receber_operacoes
   with check (empresa_id=public.app_empresa_atual() and id_usuario=public.app_usuario_atual());
 grant select,insert,update on public.baixas_receber_operacoes to anon,authenticated;
 
+-- Versao com taxa (cartao), igual a Financas/sql/60_baixa_receber_com_taxa.sql
+DROP FUNCTION IF EXISTS public.baixar_contas_receber_atomico(UUID,JSONB,TIMESTAMPTZ,BOOLEAN,BIGINT,BIGINT,TEXT);
 CREATE OR REPLACE FUNCTION public.baixar_contas_receber_atomico(
     p_id_operacao UUID,p_itens JSONB,p_data_baixa TIMESTAMPTZ,
     p_atualizar_financas BOOLEAN,p_id_conta_financas BIGINT,
-    p_id_categoria BIGINT,p_observacoes TEXT DEFAULT NULL
+    p_id_categoria BIGINT,p_observacoes TEXT DEFAULT NULL,
+    p_taxa NUMERIC DEFAULT 0,p_id_categoria_taxa BIGINT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql SECURITY INVOKER
 SET search_path=public,financas,pg_temp AS $baixa$
@@ -51,6 +54,10 @@ DECLARE
     baixas_integradas NUMERIC;
     legado NUMERIC;
     data_local DATE:=(p_data_baixa AT TIME ZONE 'America/Sao_Paulo')::DATE;
+    taxa NUMERIC:=round(COALESCE(p_taxa,0),2);
+    taxa_categoria BIGINT:=p_id_categoria_taxa;
+    taxa_movimento BIGINT;
+    codigos TEXT[]:='{}';
 BEGIN
     IF empresa IS NULL OR usuario IS NULL THEN RAISE EXCEPTION 'Sessao invalida ou expirada'; END IF;
     IF p_id_operacao IS NULL OR p_data_baixa IS NULL
@@ -62,7 +69,8 @@ BEGIN
        <>jsonb_array_length(p_itens) THEN RAISE EXCEPTION 'Titulos repetidos no lote'; END IF;
     requisicao:=jsonb_build_object('itens',p_itens,'data',p_data_baixa,
         'integrar',p_atualizar_financas,'conta',p_id_conta_financas,
-        'categoria',p_id_categoria,'observacoes',p_observacoes);
+        'categoria',p_id_categoria,'observacoes',p_observacoes)
+        ||CASE WHEN taxa<>0 THEN jsonb_build_object('taxa',taxa,'categoria_taxa',p_id_categoria_taxa) ELSE '{}'::JSONB END;
     INSERT INTO public.baixas_receber_operacoes(id_operacao,empresa_id,id_usuario,requisicao)
         VALUES(p_id_operacao,empresa,usuario,requisicao) ON CONFLICT DO NOTHING;
     SELECT * INTO operacao FROM public.baixas_receber_operacoes
@@ -75,6 +83,10 @@ BEGIN
         INTO integrado FROM public.empresas e WHERE e.id_empresa=empresa;
     IF p_atualizar_financas AND integrado IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'Configuracao da integracao mudou. Atualize a tela antes de baixar.';
+    END IF;
+    IF taxa<0 THEN RAISE EXCEPTION 'O valor liquido nao pode ser maior que o valor da baixa'; END IF;
+    IF taxa>0 AND integrado IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION 'A taxa so pode ser lancada com a opcao Atualizar o Financas marcada';
     END IF;
     IF integrado THEN
         PERFORM 1 FROM financas.contas WHERE id_empresa=empresa AND id_conta=p_id_conta_financas
@@ -141,6 +153,7 @@ BEGIN
         END IF;
         SELECT codigo_venda INTO codigo FROM public.vendas
             WHERE empresa_id=empresa AND id_venda=titulo.id_venda;
+        IF codigo IS NOT NULL AND NOT codigo=ANY(codigos) THEN codigos:=codigos||codigo; END IF;
         recebido_depois:=recebido_antes+valor_baixa;
         INSERT INTO public.contas_receber_baixas
             (id_conta,id_cliente,valor_baixa,data_baixa,meio_pagamento,observacoes)
@@ -213,11 +226,48 @@ BEGIN
         resultados:=resultados||jsonb_build_array(jsonb_build_object('conta',to_jsonb(titulo),'id_baixa',baixa_id,'aplicado',valor_baixa));
         total:=total+valor_baixa;
     END LOOP;
-    retorno:=jsonb_build_object('ok',TRUE,'aplicado',total,'qtd',jsonb_array_length(resultados),'titulos',resultados);
+    -- Taxa: saida na mesma conta que recebeu, na mesma data, dentro desta transacao.
+    IF taxa>0 THEN
+        IF taxa>=total THEN RAISE EXCEPTION 'A taxa (%) deve ser menor que o total baixado (%)',taxa,total; END IF;
+        IF taxa_categoria IS NULL THEN
+            SELECT id_categoria INTO taxa_categoria FROM financas.categorias
+                WHERE id_empresa=empresa AND ativo AND uso='saida'
+                  AND lower(trim(nome)) IN ('taxas de cartao','taxas de cartão','taxa de cartao','taxa de cartão')
+                ORDER BY id_categoria LIMIT 1;
+            IF taxa_categoria IS NULL THEN
+                INSERT INTO financas.categorias(nome,uso,tipo,cor,descricao,ativo)
+                    VALUES('Taxas de cartão','saida',NULL,'#ff8a65','Taxas descontadas nos recebimentos',TRUE)
+                    RETURNING id_categoria INTO taxa_categoria;
+            END IF;
+        END IF;
+        PERFORM 1 FROM financas.categorias WHERE id_empresa=empresa
+            AND id_categoria=taxa_categoria AND ativo AND uso='saida';
+        IF NOT FOUND THEN RAISE EXCEPTION 'Categoria da taxa invalida ou indisponivel'; END IF;
+        argumentos:=jsonb_build_object(
+            'p_tipo','saida','p_id_conta',p_id_conta_financas,'p_id_conta_destino',NULL,
+            'p_valor',taxa,'p_descricao','Taxa cartão '||COALESCE(NULLIF(array_to_string(codigos,', '),''),'recebimento'),
+            'p_data_movimento',data_local,'p_data_vencimento',data_local,'p_data_efetivacao',data_local,
+            'p_id_categoria',taxa_categoria,'p_status','efetivado',
+            'p_documento','TAXA-CR-'||baixa_id,'p_observacoes',p_observacoes);
+        SELECT 'select to_jsonb(financas.lancar_movimento('||
+            string_agg(format('%I => %L',key,value #>> '{}'),', ')||'))'
+            INTO chamada FROM jsonb_each(argumentos);
+        EXECUTE chamada INTO retorno;
+        IF jsonb_typeof(retorno)='array' THEN retorno:=retorno->0; END IF;
+        taxa_movimento:=COALESCE(retorno->>'id_movimento',retorno->>'p_id_movimento',retorno #>> '{}')::BIGINT;
+        IF taxa_movimento IS NULL OR NOT EXISTS(SELECT 1 FROM financas.movimentos m
+            WHERE m.id_empresa=empresa AND m.id_movimento=taxa_movimento AND m.id_conta=p_id_conta_financas
+              AND m.tipo='saida' AND m.status='efetivado' AND m.valor=taxa
+              AND m.data_efetivacao=data_local AND m.documento='TAXA-CR-'||baixa_id) THEN
+            RAISE EXCEPTION 'O Financas nao confirmou o lancamento da taxa';
+        END IF;
+    END IF;
+    retorno:=jsonb_build_object('ok',TRUE,'aplicado',total,'qtd',jsonb_array_length(resultados),'titulos',resultados,
+        'taxa',taxa,'liquido',total-taxa,'id_movimento_taxa',taxa_movimento);
     UPDATE public.baixas_receber_operacoes SET resultado=retorno WHERE id_operacao=p_id_operacao;
     RETURN retorno;
 END $baixa$;
-revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text) from public;
-grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text) to anon,authenticated;
+revoke all on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint) from public;
+grant execute on function public.baixar_contas_receber_atomico(uuid,jsonb,timestamptz,boolean,bigint,bigint,text,numeric,bigint) to anon,authenticated;
 notify pgrst, 'reload schema';
 commit;
