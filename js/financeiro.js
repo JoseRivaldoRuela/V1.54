@@ -383,14 +383,17 @@ async function marcarRecebido() {
   const conta=items.find(c=>Number(c.id_conta)===Number(currentId));
   if(!conta){toast('Conta não encontrada.','error');return;}
   const dataRecebimentoInformada = document.getElementById('f-data_recebimento')?.value;
+  const taxa=baixaAtualizaFinancas()?calcularTaxaBaixa(contasValorAberto(conta),document.getElementById('f-baixa_liquido')?.value):{ok:true,valor:0};
+  if(!taxa.ok){toast(taxa.message,'error');return;}
   const baixa=await aplicarBaixaContaReceber(conta,contasValorAberto(conta),{
+    taxa:taxa.valor,
     data_baixa:dataRecebimentoInformada?new Date(dataRecebimentoInformada).toISOString():new Date().toISOString(),
     meio_pagamento:document.getElementById('f-meio_pagamento')?.value||conta.meio_pagamento||null,
     observacoes:'Pagamento integral',
     atualizar_financas:baixaAtualizaFinancas()
   });
   if(!baixa.ok){toast(baixa.message,'error');return;}
-  toast(baixa.aviso||'Pagamento confirmado!',baixa.aviso?'error':'success');
+  toast(baixa.aviso||'Pagamento confirmado!'+mensagemTaxaBaixa(baixa),baixa.aviso?'error':'success');
   await loadItems();
   openItem(currentId);
 }
@@ -464,7 +467,7 @@ function solicitarContaFinancasBaixa(contas,selecionada=null) {
     });
 }
 
-async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null){
+async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null,valorBaixa=null){
   let integracao={ativa:false,contas:[],categoria:null};
   try{integracao=await carregarIntegracaoFinancas('entrada',{criarCategoria:false});}
   catch(e){return {ok:false,message:'Nao foi possivel consultar o Financas: '+(e.message||e)};}
@@ -475,7 +478,7 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null)
     document.getElementById('confirmar-baixa-rapida-receber')?.remove();
     const modal=document.createElement('div');
     modal.className='modal-overlay';modal.id='confirmar-baixa-rapida-receber';modal.style.display='flex';
-    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar recebimento</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;"></div><label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Receber.</small></span></label><div class="form-group" data-grupo-conta><label class="form-label">Onde este recebimento entrou? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(lista,conta?.id_conta_financas)}</select></div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data do recebimento *</label><input class="form-input" type="datetime-local" data-data-recebimento value="${dataLocal}"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button><button type="button" class="btn btn-primary" data-confirmar>Confirmar recebimento</button></div></div>`;
+    modal.innerHTML=`<div class="modal" style="max-width:440px;"><div class="modal-header"><span class="modal-title">Confirmar recebimento</span></div><div class="modal-body"><div data-mensagem style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:14px;"></div><label style="display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" data-atualizar-financas checked style="width:17px;height:17px;"><span><b>Atualizar tambem o Financas</b><small style="display:block;color:var(--text3);margin-top:3px;">Desmarque para registrar a baixa somente no Contas a Receber.</small></span></label><div class="form-group" data-grupo-conta><label class="form-label">Onde este recebimento entrou? *</label><select class="form-input form-select" data-conta>${opcoesContasFinancas(lista,conta?.id_conta_financas)}</select>${valorBaixa?`<label class="form-label" style="margin-top:12px;">Valor líquido na conta (cartão)</label><input class="form-input" type="number" step="0.01" data-liquido placeholder="Opcional"><small style="display:block;color:var(--text3);margin-top:3px;">Se cair menos que ${contasFmtMoeda(valorBaixa)}, a diferença vira saída de taxa no Finanças.</small>`:''}</div><div class="form-group" style="margin-top:12px;"><label class="form-label">Data do recebimento *</label><input class="form-input" type="datetime-local" data-data-recebimento value="${dataLocal}"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-cancelar>Cancelar</button><button type="button" class="btn btn-primary" data-confirmar>Confirmar recebimento</button></div></div>`;
     modal.querySelector('[data-mensagem]').textContent=mensagem;
     const campoAtualizar=modal.querySelector('[data-atualizar-financas]');
     const grupoConta=modal.querySelector('[data-grupo-conta]');
@@ -490,7 +493,9 @@ async function confirmarBaixaRapidaContaReceber(conta,mensagem,dataInicial=null)
       const valorData=modal.querySelector('[data-data-recebimento]')?.value;
       const dataRecebimento=valorData?new Date(valorData):null;
       if(!dataRecebimento||Number.isNaN(dataRecebimento.getTime())){toast('Informe uma data de recebimento valida.','error');return;}
-      concluir({ok:true,atualizarFinancas,contaId:atualizarFinancas&&integracao.ativa?contaId:null,dataRecebimento:dataRecebimento.toISOString()});
+      const taxa=atualizarFinancas&&integracao.ativa&&valorBaixa?calcularTaxaBaixa(valorBaixa,modal.querySelector('[data-liquido]')?.value):{ok:true,valor:0};
+      if(!taxa.ok){toast(taxa.message,'error');return;}
+      concluir({ok:true,atualizarFinancas,contaId:atualizarFinancas&&integracao.ativa?contaId:null,dataRecebimento:dataRecebimento.toISOString(),taxa:taxa.valor});
     };
     modal.addEventListener('click',e=>{if(e.target===modal)concluir({ok:false,cancelada:true});});
     document.body.appendChild(modal);
@@ -576,7 +581,7 @@ async function marcarContaReceberPagaRapido(idConta, event) {
   const saldo = contasValorAberto(conta);
   if(!conta || saldo <= 0.005) { toast('Esta conta já está quitada.','info'); return; }
   const cliente = conta.clientes?.nome_fantasia || conta.clientes?.razao_social || `Conta #${idConta}`;
-  const confirmacao=await confirmarBaixaRapidaContaReceber(conta,`Marcar como recebido ${contasFmtMoeda(saldo)} de ${cliente}?`);
+  const confirmacao=await confirmarBaixaRapidaContaReceber(conta,`Marcar como recebido ${contasFmtMoeda(saldo)} de ${cliente}?`,null,saldo);
   if(!confirmacao.ok){if(!confirmacao.cancelada)toast(confirmacao.message,'error');return;}
   if(botao) { botao.disabled=true; botao.textContent='Baixando...'; }
   const baixa = await aplicarBaixaContaReceber(conta, saldo, {
@@ -584,14 +589,15 @@ async function marcarContaReceberPagaRapido(idConta, event) {
     meio_pagamento: conta.meio_pagamento || null,
     observacoes: 'Pagamento integral pela lista lateral',
     id_conta_financas:confirmacao.contaId,
-    atualizar_financas:confirmacao.atualizarFinancas
+    atualizar_financas:confirmacao.atualizarFinancas,
+    taxa:confirmacao.taxa
   });
   if(!baixa.ok) {
     if(botao) { botao.disabled=false; botao.textContent='✓ Pago'; }
     toast(baixa.message,'error');
     return;
   }
-  toast(baixa.aviso||`Conta quitada: ${contasFmtMoeda(baixa.aplicado)}.`,baixa.aviso?'error':'success');
+  toast(baixa.aviso||`Conta quitada: ${contasFmtMoeda(baixa.aplicado)}.${mensagemTaxaBaixa(baixa)}`,baixa.aviso?'error':'success');
   currentId = null;
   await renderDashboardContas();
 }
