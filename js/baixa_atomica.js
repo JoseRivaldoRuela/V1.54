@@ -31,6 +31,8 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
     requisicao.p_taxa = taxa;
     if(opcoes.tipo_taxa==='desconto') requisicao.p_tipo_taxa = 'desconto';
   }
+  // Baixa por cliente: um unico lancamento no Financas com o valor que entrou no banco.
+  if(opcoes.agrupar===true&&financeiro.ativa===true) requisicao.p_agrupar = true;
   const juros = Math.round(Number(opcoes.juros||0)*100)/100;
   if(juros<0) return {ok:false,message:'Juros invalidos.'};
   if(juros>0) {
@@ -58,7 +60,9 @@ async function executarBaixaReceberAtomica(contas, valorInformado, opcoes, finan
       if(banco) sessionStorage.removeItem(chave);
       const instalar = /PGRST202|42883/.test(codigo);
       return {ok:false,message:instalar
-        ? (taxa>0||juros>0
+        ? requisicao.p_agrupar
+          ? 'Baixa por cliente bloqueada: rode a SQL 65_baixa_cliente_lancamento_unico no Supabase. Nada foi baixado.'
+        : (taxa>0||juros>0
           ? 'Baixa com taxa/desconto/juros bloqueada: rode a SQL 62_baixa_receber_com_desconto no Supabase. Nada foi baixado.'
           : 'Baixa bloqueada: instale a SQL baixa_receber_atomica no Supabase. Nenhum recebimento foi enviado pelo fluxo antigo.')
         : (res.data?.message||'Erro ao executar a baixa.')+(banco?' Nenhuma alteracao desta baixa foi confirmada.':' Resultado nao confirmado. Confira antes de repetir.')};

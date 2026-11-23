@@ -118,7 +118,7 @@ async function anexarContasBaixaFinancas(titulos){
     console.warn('Nao foi possivel consultar o movimento da baixa no Financas.',error);
   }
   try{
-    const idsConta=[...new Set(vinculados.map(t=>Number(movimentoPorId.get(Number(t.id_movimento_financas))?.id_conta||t.id_conta_financas)).filter(Boolean))];
+    const idsConta=[...new Set(vinculados.flatMap(t=>[Number(movimentoPorId.get(Number(t.id_movimento_financas))?.id_conta),Number(t.id_conta_financas)]).filter(Boolean))];
     let contas=[];
     if(idsConta.length){
       try{contas=await financasRequest(`contas?select=id_conta,nome&id_conta=in.(${idsConta.join(',')})`);}
@@ -134,10 +134,11 @@ async function anexarContasBaixaFinancas(titulos){
     salvarNomesContasFinancas(contas);
     vinculados.forEach(t=>{
       const movimento=movimentoPorId.get(Number(t.id_movimento_financas));
-      const contaId=Number(movimento?.id_conta||t.id_conta_financas)||null;
+      const agrupada=movimento?.status==='cancelado'&&Number(t.valor_recebido)>0.005;
+      const contaId=Number(agrupada?t.id_conta_financas:movimento?.id_conta||t.id_conta_financas)||null;
       t._id_conta_baixa_financas=contaId;
       t._conta_baixa_financas=contaPorId.get(contaId)||nomesContasFinancasSalvos()[String(contaId)]||null;
-      t._data_baixa_financas=movimento?.data_efetivacao||null;
+      t._data_baixa_financas=agrupada?dataCalendarioFinancas(t.data_recebimento):movimento?.data_efetivacao||null;
     });
   }catch(error){
     console.warn('Não foi possível consultar a conta da baixa no Finanças.',error);
@@ -227,8 +228,41 @@ async function alterarStatusMovimentoFinancas(idMovimento,status,dataEfetivacao)
   return true;
 }
 
+async function baixasAgrupadasReceber(idConta){
+  let baixas=await apiGet(`contas_receber_baixas?select=id_baixa,valor_baixa,id_movimento_financas&id_conta=eq.${Number(idConta)}&id_movimento_financas=not.is.null`);
+  if(!Array.isArray(baixas))return [];// SQL 65 ainda nao instalada: nao existem baixas agrupadas
+  baixas=baixas.filter(b=>Number(b.id_movimento_financas)>0);
+  if(!baixas.length)return [];
+  const ids=[...new Set(baixas.map(b=>Number(b.id_movimento_financas)))];
+  const movimentos=await financasRequest(`movimentos?select=*&id_movimento=in.(${ids.join(',')})&status=eq.efetivado`);
+  const porId=new Map((Array.isArray(movimentos)?movimentos:[]).map(m=>[Number(m.id_movimento),m]));
+  return baixas.filter(b=>porId.has(Number(b.id_movimento_financas))).map(b=>({...b,movimento:porId.get(Number(b.id_movimento_financas))}));
+}
+
+// Tira a parte do titulo do lancamento agrupado (reativacao/cancelamento) e desliga a baixa dele.
+async function estornarBaixaAgrupadaReceber(baixa){
+  const lista=await financasRequest(`movimentos?select=*&id_movimento=eq.${Number(baixa.id_movimento_financas)}&limit=1`),m=Array.isArray(lista)?lista[0]:null;
+  if(m&&m.status!=='cancelado'){
+    const restante=Number((Number(m.valor)-Number(baixa.valor_baixa)).toFixed(2));
+    const nota=`Estornado titulo #${baixa.id_baixa}: ${Number(baixa.valor_baixa).toFixed(2).replace('.',',')}`;
+    await financasRequest('rpc/alterar_movimento',{method:'POST',body:JSON.stringify({p_id_movimento:m.id_movimento,p_id_conta:m.id_conta,p_id_conta_destino:null,p_tipo:m.tipo,
+      p_valor:restante>0.005?restante:Number(m.valor),p_descricao:m.descricao,p_data_movimento:dataCalendarioFinancas(m.data_movimento),
+      p_data_vencimento:dataCalendarioFinancas(m.data_vencimento||m.data_movimento),p_data_efetivacao:dataCalendarioFinancas(m.data_efetivacao||m.data_movimento),
+      p_id_categoria:m.id_categoria||null,p_status:restante>0.005?m.status:'cancelado',p_documento:m.documento||null,
+      p_observacoes:[m.observacoes,nota].filter(Boolean).join(' | ')})});
+  }
+  const salvo=await apiPatch(`contas_receber_baixas?id_baixa=eq.${Number(baixa.id_baixa)}`,{id_movimento_financas:null},{sincronizarFinancas:false});
+  if(!salvo.ok)throw new Error('Nao foi possivel desligar a baixa do lancamento agrupado.');
+}
+
 async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
   if(tabela==='contas_pagar'&&titulo&&typeof preservarBaixasContaPagar==='function'&&await preservarBaixasContaPagar(titulo))return;
+  let agrupadas=[];
+  if(tabela==='contas_receber'&&titulo?.id_conta&&await empresaIntegraFinancas()){
+    agrupadas=await baixasAgrupadasReceber(titulo.id_conta);
+    const zerado=Math.max(0,Number(titulo.valor_recebido)||0)<=0.005||titulo.status_recebimento==='CANCELADO';
+    if(zerado&&agrupadas.length){for(const baixa of agrupadas)await estornarBaixaAgrupadaReceber(baixa);agrupadas=[];}
+  }
   if(!titulo?.id_movimento_financas||!await empresaIntegraFinancas())return;
   const lista=await financasRequest(`movimentos?select=*&id_movimento=eq.${Number(titulo.id_movimento_financas)}&limit=1`),m=Array.isArray(lista)?lista[0]:null;
   if(!m)return;
@@ -247,12 +281,14 @@ async function sincronizarTituloFinanceiroAposAlteracao(tabela,titulo){
       const lote=await financasRequest(`movimentos?select=id_movimento,valor,status&documento=in.(${documentos.slice(i,i+100).join(',')})&status=neq.cancelado`);
       movimentos.push(...lote);
     }
+    // Cada baixa agrupada conta como recebida pelo valor dela (o lancamento e compartilhado).
+    movimentos.push(...agrupadas.map(b=>({id_movimento:-Number(b.id_baixa),valor:Number(b.valor_baixa),status:'efetivado',agrupada:true})));
     if(movimentos.length){
       const total=Number(movimentos.filter(x=>x.status==='efetivado').reduce((s,x)=>s+Number(x.valor),0).toFixed(2));
       const reativado=valorBaixado<=0.005;
       const cancelado=statusLocal==='CANCELADO';
       if(reativado||cancelado){
-        for(const movimento of movimentos)await alterarStatusMovimentoFinancas(movimento.id_movimento,'cancelado',titulo.data_recebimento);
+        for(const movimento of movimentos)if(!movimento.agrupada)await alterarStatusMovimentoFinancas(movimento.id_movimento,'cancelado',titulo.data_recebimento);
       }else if(total>valorBaixado+0.005){
         throw new Error('O valor recebido e menor que as baixas registradas. Reative a baixa antes de alterar o valor.');
       }

@@ -785,7 +785,7 @@ async function aplicarBaixaClienteContas() {
     `valor informado ${contasFmtMoeda(valorInformado)}`,
     observacoes
   ].filter(Boolean).join(' - ');
-  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote,taxa:taxa.valor,juros:taxa.juros,tipo_taxa:document.getElementById('baixa-cliente-tipo-diferenca')?.value},financeiro);
+  const baixa = await executarBaixaReceberAtomica(abertas,valorInformado,{data_baixa,meio_pagamento:meio,observacoes:obsLote,taxa:taxa.valor,juros:taxa.juros,tipo_taxa:document.getElementById('baixa-cliente-tipo-diferenca')?.value,agrupar:true},financeiro);
   if(!baixa.ok){toast(baixa.message,'error');return;}
   const totalAplicado=baixa.aplicado, qtd=baixa.qtd;
   restante=baixa.sobra;
