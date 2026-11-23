@@ -1044,7 +1044,23 @@ async function ajustarPrecosEspeciaisProduto(idProduto,precoAnterior,precoNovo,m
   return {ok:true,quantidade:especiais.length};
 }
 
+// Impede liberar a mesma compra duas vezes em paralelo (clique duplo gerava titulos e estoque em dobro).
+const liberacoesCompraEmAndamento=new Set();
 async function confirmarLiberacaoCompra(idCompra) {
+  const chave=Number(idCompra);
+  if(liberacoesCompraEmAndamento.has(chave))return;
+  liberacoesCompraEmAndamento.add(chave);
+  const botao=document.getElementById('btn-confirmar-liberacao');
+  if(botao){botao.disabled=true;botao.textContent='Liberando...';}
+  try{await executarLiberacaoCompra(idCompra);}
+  finally{
+    liberacoesCompraEmAndamento.delete(chave);
+    const atual=document.getElementById('btn-confirmar-liberacao');
+    if(atual){atual.disabled=false;atual.textContent='Liberar';}
+  }
+}
+
+async function executarLiberacaoCompra(idCompra) {
   const compra = items.find(x=>Number(x.id_compra)===Number(idCompra));
   if(!compra){ toast('Compra não encontrada.','error'); return; }
   const itens = await carregarItensCompra(idCompra);
