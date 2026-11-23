@@ -310,7 +310,7 @@ async function parcelarContaReceber() {
   const criadas=await apiPost('contas_receber',dados);
   if(!criadas.ok){toast('Primeira parcela salva, mas houve erro ao criar as demais.','error');return;}
   const parcelasSalvas=[...(Array.isArray(atualizada.data)?atualizada.data:[]),...(Array.isArray(criadas.data)?criadas.data:[])];
-  const sincronizacao=await vincularTitulosReceberFinancas(parcelasSalvas,financeiro,'Conta a receber parcelada');
+  const sincronizacao=await vincularTitulosReceberFinancas(parcelasSalvas,financeiro,descricaoTituloManualFinancas({...conta,observacoes:obsBase},'Conta a receber parcelada'));
   if(!sincronizacao.ok){toast(`Parcelas salvas, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');return;}
   invalidarResumoContasVendas(); toast(`${qtd} parcelas geradas!`,'success'); await loadItems(); openItem(currentId);
 }
@@ -356,7 +356,7 @@ async function saveConta() {
     const criado=await apiPost('contas_receber',registros.map(({data_recebimento,...registro})=>registro));
     if(criado.ok){
       const titulos=Array.isArray(criado.data)?criado.data:[criado.data].filter(Boolean);
-      const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,'Conta a receber manual');
+      const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,descricaoTituloManualFinancas(data));
       if(!sincronizacao.ok){toast(`Conta criada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');btn.disabled=false;btn.textContent='Salvar';return;}
       invalidarResumoContasVendas();toast(qtd>1?`${qtd} contas a receber criadas!`:'Conta a receber criada!','success');await finalizarCadastroNovo();
     }
@@ -372,7 +372,7 @@ async function saveConta() {
   const{ok,data:res}=await apiPatch(`contas_receber?id_conta=eq.${currentId}`,data,{sincronizarFinancas:atualizarFinancas});
   if(ok){
     const titulos=Array.isArray(res)?res:[];
-    const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,'Conta a receber manual');
+    const sincronizacao=await vincularTitulosReceberFinancas(titulos,financeiro,descricaoTituloManualFinancas(data));
     if(!sincronizacao.ok){toast(`Conta atualizada, mas o Finanças não foi atualizado: ${sincronizacao.message}`,'error');btn.disabled=false;btn.textContent='Salvar';return;}
     invalidarResumoContasVendas(); formularioAlterado=false; toast('Conta atualizada!','success'); await loadItems(); openItem(currentId);
   }
@@ -515,6 +515,14 @@ async function prepararIntegracaoBaixaContaReceber(conta, contaInformada, atuali
   if(!contaId)contaId=Number(await solicitarContaFinancasBaixa(integracao.contas,conta?.id_conta_financas)||0);
   if(!contaId)return {ok:false,cancelada:true,message:'Baixa cancelada: selecione a conta do Finanças.'};
   return {ok:true,ativa:true,contaId,integracao};
+}
+
+function descricaoTituloManualFinancas(titulo,prefixo='Conta a receber') {
+  const select=document.getElementById('f-id_cliente');
+  const opcao=select&&Number(select.value)===Number(titulo?.id_cliente)?select.selectedOptions?.[0]:null;
+  const cliente=(opcao?.textContent||titulo?.clientes?.nome_fantasia||titulo?.clientes?.razao_social||'').trim();
+  const obs=String(titulo?.observacoes||'').split('|')[0].replace(/^Baixa:.*$/i,'').trim().slice(0,60);
+  return [prefixo,cliente].filter(Boolean).join(' · ')+(obs?` (${obs})`:'');
 }
 
 async function vincularTitulosReceberFinancas(titulos,financeiro,descricao) {
