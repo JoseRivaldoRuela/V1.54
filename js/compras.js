@@ -1313,7 +1313,7 @@ async function renderFormContaPagar(c) {
     </div>` : ''}
     ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
     <div class="form-grid">
-      <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="2"/></div>
+      <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="" placeholder="ex.: 2"/></div>
       <div class="form-group"><label class="form-label">Dias entre parcelas</label><input class="form-input" type="number" min="0" step="1" id="f-reparcelar-dias" value="0"/></div>
     </div>` : ''}
     <div class="section-label"><span>Observações</span></div>
@@ -1324,7 +1324,7 @@ async function renderFormContaPagar(c) {
     ` : ''}
     <label style="display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;"><input type="checkbox" id="f-baixa-atualizar-financas" checked style="width:17px;height:17px;"><span style="font-size:12px;"><b>Atualizar o Finanças nas baixas e reativações</b><small style="display:block;color:var(--text3);margin-top:2px;">Desmarque para alterar somente o Contas a Pagar.</small></span></label>
     <div class="form-actions">
-      ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
+      ${!origemCompra||(c&&c.status_pagamento!=='PAGO')?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
       ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
       ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">Pago</span>') : ''}
@@ -1428,8 +1428,10 @@ async function saveContaPagar() {
     else toast('Erro ao criar conta: '+([criado.data?.message,criado.data?.details,criado.data?.hint].filter(Boolean).join(' - ')||'erro'),'error');
     return;
   }
-  if(items.find(x=>Number(x.id_conta_pagar)===Number(currentId))?.id_compra){toast('O valor deste título vem da compra. Altere a compra de origem.','error');return;}
-  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,data,{sincronizarFinancas:baixaAtualizaFinancas()});
+  // Titulo de compra: valor, fornecedor e status vem da compra/baixas; salva so meio, vencimento e observacoes.
+  const daCompra=Boolean(items.find(x=>Number(x.id_conta_pagar)===Number(currentId))?.id_compra);
+  const payload=daCompra?{meio_pagamento:data.meio_pagamento,data_vencimento:data.data_vencimento,observacoes:data.observacoes}:data;
+  const res = await apiPatch(`contas_pagar?id_conta_pagar=eq.${currentId}`,payload,{sincronizarFinancas:baixaAtualizaFinancas()});
   if(!res.ok){ toast('Erro ao salvar conta: '+(res.data?.message||'erro'),'error'); return; }
   toast('Conta atualizada.','success');
   formularioAlterado=false;
