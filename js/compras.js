@@ -1311,7 +1311,7 @@ async function renderFormContaPagar(c) {
       <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="f-novas-parcelas" value="1"/></div>
       <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="f-novas-dias" value="0"/></div>
     </div>` : ''}
-    ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
+    ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="2"/></div>
       <div class="form-group"><label class="form-label">Dias entre parcelas</label><input class="form-input" type="number" min="0" step="1" id="f-reparcelar-dias" value="0"/></div>
@@ -1326,7 +1326,7 @@ async function renderFormContaPagar(c) {
     <div class="form-actions">
       ${!origemCompra?'<button class="btn btn-primary" id="btn-save" onclick="saveContaPagar()">✓ Salvar</button>':''}
       ${c&&c.status_pagamento!=='PAGO'?'<button class="btn btn-danger" onclick="excluirContaPagar()">Excluir</button>':''}
-      ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
+      ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? '<button class="btn btn-secondary" onclick="parcelarContaPagar()">Parcelar conta</button>' : ''}
       ${c ? (c.status_pagamento !== 'PAGO' ? `<button class="btn btn-primary" style="background:var(--accent2);" onclick="marcarContaPagarPaga()">Marcar Pago</button>` : '<span class="pill on" style="padding:8px 14px;font-size:12px;">Pago</span>') : ''}
       ${integracaoFinancasAtiva&&c?.status_pagamento==='PAGO'&&!c?.id_movimento_financas?`<button type="button" class="btn btn-primary" onclick="sincronizarContaPagaFinancas(${c.id_conta_pagar})">Enviar ao Financas</button>`:''}
       ${valorPagoAtual > 0.005 || c?.status_pagamento==='PAGO' ? '<button type="button" class="btn btn-secondary" onclick="reativarContaPagar()">↺ Reativar baixa</button>' : ''}
@@ -1350,6 +1350,26 @@ async function excluirContaPagar() {
   else toast('Erro ao excluir as parcelas.','error');
 }
 
+// Ao parcelar, a previsao existente no Financas vira a 1a parcela e as demais ganham previsoes proprias.
+async function sincronizarParcelamentoFinancas(conta,grupo){
+  if(!conta?.id_movimento_financas||document.getElementById('f-baixa-atualizar-financas')?.checked===false)return {ok:true};
+  try{
+    if(!await empresaIntegraFinancas())return {ok:true};
+    const titulos=await apiGet(`contas_pagar?select=*&grupo_parcelamento=eq.${encodeURIComponent(grupo)}&order=numero_parcela.asc`);
+    if(!Array.isArray(titulos))throw new Error('não foi possível reler as parcelas');
+    const primeiro=titulos.find(t=>Number(t.id_conta_pagar)===Number(conta.id_conta_pagar));
+    if(primeiro)await sincronizarTituloFinanceiroAposAlteracao('contas_pagar',primeiro);
+    const lista=await financasRequest(`movimentos?select=id_conta,id_categoria,descricao,documento&id_movimento=eq.${Number(conta.id_movimento_financas)}&limit=1`);
+    const m=Array.isArray(lista)?lista[0]:null;
+    const integracao=await carregarIntegracaoFinancas('saida');
+    return await vincularMovimentosFinancas('contas_pagar','id_conta_pagar',titulos.filter(t=>!t.id_movimento_financas),{
+      ativa:integracao.ativa,tipo:'saida',contaId:conta.id_conta_financas||m?.id_conta,
+      categoria:m?.id_categoria?{id_categoria:m.id_categoria}:integracao.categoria,
+      descricao:m?.descricao||conta.observacoes||`Pagamento #${conta.id_conta_pagar}`,documento:m?.documento||null
+    });
+  }catch(error){return {ok:false,message:error.message||String(error)};}
+}
+
 async function parcelarContaPagar() {
   const conta = items.find(x=>Number(x.id_conta_pagar)===Number(currentId));
   if(!conta || conta.status_pagamento==='PAGO' || Number(conta.valor_pago||0)>0){ toast('Somente contas sem pagamentos podem ser parceladas.','error'); return; }
@@ -1370,7 +1390,10 @@ async function parcelarContaPagar() {
   if(!atualizada.ok){toast('Erro ao atualizar a primeira parcela.','error');return;}
   const criadas=await apiPost('contas_pagar',dados);
   if(!criadas.ok){toast('Primeira parcela salva, mas houve erro ao criar as demais.','error');return;}
-  toast(`${qtd} parcelas geradas!`,'success'); await loadItems(); openItem(currentId);
+  const financas=await sincronizarParcelamentoFinancas(conta,grupo);
+  if(!financas.ok)toast(`${qtd} parcelas geradas, mas o Finanças não foi atualizado: ${financas.message}`,'error');
+  else toast(`${qtd} parcelas geradas!`,'success');
+  await loadItems(); openItem(currentId);
 }
 
 async function saveContaPagar() {
