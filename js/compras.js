@@ -1311,7 +1311,7 @@ async function renderFormContaPagar(c) {
       <div class="form-group"><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" step="1" id="f-novas-parcelas" value="1"/></div>
       <div class="form-group"><label class="form-label">Intervalo (se parcelado)</label><input class="form-input" type="number" min="0" step="1" id="f-novas-dias" value="0"/></div>
     </div>` : ''}
-    ${c && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
+    ${c && !origemCompra && c.status_pagamento!=='PAGO' && Number(c.valor_pago||0)===0 ? `<div class="section-label"><span>Parcelar esta conta</span></div>
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Quantidade de parcelas</label><input class="form-input" type="number" min="2" step="1" id="f-reparcelar-quantidade" value="2"/></div>
       <div class="form-group"><label class="form-label">Dias entre parcelas</label><input class="form-input" type="number" min="0" step="1" id="f-reparcelar-dias" value="0"/></div>
