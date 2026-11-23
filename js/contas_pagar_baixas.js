@@ -27,7 +27,7 @@ async function enviarBaixaPagarAtomica(requisicao){
 function solicitarBaixaParcialPagar(conta,integracao){
   return new Promise(resolve=>{
     if(document.getElementById('baixa-parcial-pagar'))return resolve(null);
-    const saldo=saldoContaPagar(conta),contas=integracao.contas.filter(c=>c.ativo!==false&&c.tipo!=='cartao');
+    const saldo=saldoContaPagar(conta),contas=integracao.contas.filter(c=>c.ativo!==false);
     const modal=document.createElement('div');modal.className='modal-overlay';modal.id='baixa-parcial-pagar';modal.style.display='flex';
     modal.innerHTML=`<div class="modal" style="max-width:520px"><div class="modal-header"><span class="modal-title">Baixar valor — Contas a pagar</span></div><form data-form><div class="modal-body">
       <p>Total: <b>${compraFmt(conta.valor_original)}</b> · Já pago: <b>${compraFmt(conta.valor_pago||0)}</b><br>Saldo restante: <b>${compraFmt(saldo)}</b></p>
