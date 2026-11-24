@@ -228,19 +228,29 @@ async function alterarStatusMovimentoFinancas(idMovimento,status,dataEfetivacao)
   return true;
 }
 
+// Baixas que nao tem um recebimento proprio (BAIXA-CR-): as que estao dentro de um lancamento
+// agrupado (SQL 65) e as feitas sem atualizar o Financas, como brinde ou troca (SQL 66).
 async function baixasAgrupadasReceber(idConta){
-  let baixas=await apiGet(`contas_receber_baixas?select=id_baixa,valor_baixa,id_movimento_financas&id_conta=eq.${Number(idConta)}&id_movimento_financas=not.is.null`);
+  const filtro=`id_conta=eq.${Number(idConta)}`;
+  let baixas=await apiGet(`contas_receber_baixas?select=id_baixa,valor_baixa,id_movimento_financas,sem_financas&${filtro}&or=(id_movimento_financas.not.is.null,sem_financas.is.true)`);
+  if(!Array.isArray(baixas))baixas=await apiGet(`contas_receber_baixas?select=id_baixa,valor_baixa,id_movimento_financas&${filtro}&id_movimento_financas=not.is.null`);
   if(!Array.isArray(baixas))return [];// SQL 65 ainda nao instalada: nao existem baixas agrupadas
-  baixas=baixas.filter(b=>Number(b.id_movimento_financas)>0);
-  if(!baixas.length)return [];
-  const ids=[...new Set(baixas.map(b=>Number(b.id_movimento_financas)))];
+  const ligadas=baixas.filter(b=>Number(b.id_movimento_financas)>0);
+  const semFinancas=baixas.filter(b=>b.sem_financas===true&&!(Number(b.id_movimento_financas)>0)).map(b=>({...b,semFinancas:true}));
+  if(!ligadas.length)return semFinancas;
+  const ids=[...new Set(ligadas.map(b=>Number(b.id_movimento_financas)))];
   const movimentos=await financasRequest(`movimentos?select=*&id_movimento=in.(${ids.join(',')})&status=eq.efetivado`);
   const porId=new Map((Array.isArray(movimentos)?movimentos:[]).map(m=>[Number(m.id_movimento),m]));
-  return baixas.filter(b=>porId.has(Number(b.id_movimento_financas))).map(b=>({...b,movimento:porId.get(Number(b.id_movimento_financas))}));
+  return [...ligadas.filter(b=>porId.has(Number(b.id_movimento_financas))).map(b=>({...b,movimento:porId.get(Number(b.id_movimento_financas))})),...semFinancas];
 }
 
 // Tira a parte do titulo do lancamento agrupado (reativacao/cancelamento) e desliga a baixa dele.
 async function estornarBaixaAgrupadaReceber(baixa){
+  if(baixa.semFinancas){
+    const desmarcada=await apiPatch(`contas_receber_baixas?id_baixa=eq.${Number(baixa.id_baixa)}`,{sem_financas:false},{sincronizarFinancas:false});
+    if(!desmarcada.ok)throw new Error('Nao foi possivel desfazer a baixa sem Financas.');
+    return;
+  }
   const lista=await financasRequest(`movimentos?select=*&id_movimento=eq.${Number(baixa.id_movimento_financas)}&limit=1`),m=Array.isArray(lista)?lista[0]:null;
   if(m&&m.status!=='cancelado'){
     const restante=Number((Number(m.valor)-Number(baixa.valor_baixa)).toFixed(2));
